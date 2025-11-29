@@ -1,0 +1,59 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build and Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Get version from tag
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Build binaries
+        run: |
+          # Windows AMD64
+          GOOS=windows GOARCH=amd64 go build -o pf-windows-amd64.exe
+
+          # Linux AMD64
+          GOOS=linux GOARCH=amd64 go build -o pf-linux-amd64
+
+          # Linux ARM64
+          GOOS=linux GOARCH=arm64 go build -o pf-linux-arm64
+
+          # macOS Intel
+          GOOS=darwin GOARCH=amd64 go build -o pf-darwin-amd64
+
+          # macOS Apple Silicon
+          GOOS=darwin GOARCH=arm64 go build -o pf-darwin-arm64
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            pf-windows-amd64.exe
+            pf-linux-amd64
+            pf-linux-arm64
+            pf-darwin-amd64
+            pf-darwin-arm64
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
