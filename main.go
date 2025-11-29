@@ -19,7 +19,7 @@ func main() {
 	switch cmd {
 	case "a", "add":
 		if len(os.Args) < 4 {
-			fmt.Printf("%sError:%s Usage: pf %sa%s <name> <command> [port]\n", ColorRed, ColorReset, ColorCyan, ColorReset)
+			fmt.Printf("%sError:%s Usage: pf %sa%s <name> <command> \n", ColorRed, ColorReset, ColorCyan, ColorReset)
 			fmt.Printf("%sExample:%s pf a db \"ssh -L\" 5432:5432\n", ColorYellow, ColorReset)
 			return
 		}
