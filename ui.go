@@ -76,9 +76,9 @@ func DisplayStatusLoop() {
 		if len(names) == 0 {
 			fmt.Printf("  %sNo services running...%s\n", ColorGray, ColorReset)
 		} else {
-			fmt.Printf("  ┌──────────────────────┬───────────────┬──────────────────┐\n")
-			fmt.Printf("  │ %sService%s              │ %sStatus%s        │ %sPorts%s            │\n", ColorBold, ColorReset, ColorBold, ColorReset, ColorBold, ColorReset)
-			fmt.Printf("  ├──────────────────────┼───────────────┼──────────────────┤\n")
+			fmt.Printf("  ┌──────────────────────┬─────────────────┬──────────────────┐\n")
+			fmt.Printf("  │ %sService%s              │ %sStatus%s          │ %sPorts%s            │\n", ColorBold, ColorReset, ColorBold, ColorReset, ColorBold, ColorReset)
+			fmt.Printf("  ├──────────────────────┼─────────────────┼──────────────────┤\n")
 
 			for _, name := range names {
 				s := statuses[name]
@@ -94,12 +94,12 @@ func DisplayStatusLoop() {
 
 				ports := fmt.Sprintf("%s → %s", s.Local, s.Remote)
 
-				fmt.Printf("  │ %-20s │ %s%-13s%s │ %-16s │\n",
+				fmt.Printf("  │ %-20s │ %s%-15s%s │ %-16s │\n",
 					displayName,
 					color, statusText, ColorReset,
 					ports)
 			}
-			fmt.Printf("  └──────────────────────┴───────────────┴──────────────────┘\n")
+			fmt.Printf("  └──────────────────────┴─────────────────┴──────────────────┘\n")
 		}
 		mu.Unlock()
 
