@@ -11,9 +11,9 @@ func ClearScreen() {
 }
 
 func PrintBanner() {
-	fmt.Printf("%s%s╔═══════════════════════════════════════╗%s\n", ColorBold, ColorCyan, ColorReset)
-	fmt.Printf("%s%s║     Port Forward Manager v1.0         ║%s\n", ColorBold, ColorCyan, ColorReset)
-	fmt.Printf("%s%s╚═══════════════════════════════════════╝%s\n", ColorBold, ColorCyan, ColorReset)
+	fmt.Printf("%s%s  ╔═══════════════════════════════════════════════════════════╗%s\n", ColorBold, ColorCyan, ColorReset)
+	fmt.Printf("%s%s  ║                  Port Forward Manager v1.0                ║%s\n", ColorBold, ColorCyan, ColorReset)
+	fmt.Printf("%s%s  ╚═══════════════════════════════════════════════════════════╝%s\n", ColorBold, ColorCyan, ColorReset)
 }
 
 func PrintHelp() {
@@ -64,7 +64,7 @@ func DisplayStatusLoop() {
 	for {
 		ClearScreen()
 		PrintBanner()
-		fmt.Printf("\n%s%s Status Monitor %s\n\n", ColorBold, ColorCyan, ColorReset)
+		fmt.Printf("\n%s%s  Status Monitor %s\n\n", ColorBold, ColorCyan, ColorReset)
 
 		mu.Lock()
 		names := make([]string, 0, len(statuses))
