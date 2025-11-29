@@ -4,70 +4,49 @@ Minimal CLI tool for managing multiple port-forward connections.
 
 ## Install
 
-### Option 1: Download Pre-built Binary (Recommended)
-
-No need to install Go! Download the binary for your platform from [Releases](https://github.com/alinemone/go-port-forward/releases):
 
 #### Windows
-```powershell
-# Download pf-windows-amd64.exe from releases
-# Rename to pf.exe
-# Move to C:\pf
-# Add C:\pf to PATH
-```
 
-#### Linux (AMD64)
-```bash
-# Download the latest release
-curl -L -o pf https://github.com/alinemone/go-port-forward/releases/latest/download/pf-linux-amd64
+1. Build the binary:
+   ```bash
+   go build -o pf.exe
+   ```
+2. Create directory: `C:\pf`
+3. Copy `pf.exe` to `C:\pf`
+4. Add to PATH:
+   - Open **System Properties** → **Environment Variables**
+   - Edit **Path** → Add `C:\pf`
+   - Restart terminal
 
-# Install
-sudo mv pf /usr/local/bin/
-sudo chmod +x /usr/local/bin/pf
-```
+#### Linux
 
-#### Linux (ARM64)
-```bash
-curl -L -o pf https://github.com/alinemone/go-port-forward/releases/latest/download/pf-linux-arm64
-sudo mv pf /usr/local/bin/
-sudo chmod +x /usr/local/bin/pf
-```
+1. Build the binary:
+   ```bash
+   go build -o pf
+   ```
+2. Move to system path:
+   ```bash
+   sudo mv pf /usr/local/bin/
+   ```
+3. Make executable:
+   ```bash
+   sudo chmod +x /usr/local/bin/pf
+   ```
 
-#### macOS (Intel)
-```bash
-curl -L -o pf https://github.com/alinemone/go-port-forward/releases/latest/download/pf-darwin-amd64
-sudo mv pf /usr/local/bin/
-sudo chmod +x /usr/local/bin/pf
-```
+#### macOS
 
-#### macOS (Apple Silicon)
-```bash
-curl -L -o pf https://github.com/alinemone/go-port-forward/releases/latest/download/pf-darwin-arm64
-sudo mv pf /usr/local/bin/
-sudo chmod +x /usr/local/bin/pf
-```
-
-### Option 2: Build from Source
-
-Requires Go 1.21+
-
-```bash
-# Clone the repository
-git clone https://github.com/alinemone/go-port-forward.git
-cd go-port-forward
-
-# Build for your platform
-go build -o pf
-
-# Or cross-compile for other platforms:
-# GOOS=windows GOARCH=amd64 go build -o pf.exe
-# GOOS=linux GOARCH=amd64 go build -o pf
-# GOOS=darwin GOARCH=arm64 go build -o pf
-```
-
-Then follow the installation steps above for your platform.
-
----
+1. Build the binary:
+   ```bash
+   go build -o pf
+   ```
+2. Move to system path:
+   ```bash
+   sudo mv pf /usr/local/bin/
+   ```
+3. Make executable:
+   ```bash
+   sudo chmod +x /usr/local/bin/pf
+   ```
 
 Now use `pf` from anywhere! 🚀
 
