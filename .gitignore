@@ -1,4 +1,3 @@
-
 *.so
 
 ## Directory-based project format:
@@ -6,3 +5,8 @@
 .claude/
 services.json
 *.exe
+
+## Build artifacts
+pf
+pf-*
+dist/
