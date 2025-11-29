@@ -1,3 +1,3 @@
-module github.com/alinemone/go-port-forward
+module github.com/alinemone/pf
 
 go 1.25.0
