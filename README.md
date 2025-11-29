@@ -8,6 +8,18 @@ Minimal CLI tool for managing multiple port-forward connections.
 go build -o pf.exe
 ```
 
+### Global Installation (Windows)
+
+1. Create directory: `C:\pf`
+2. Copy `pf.exe` to `C:\pf`
+3. Add to PATH:
+   - Open **System Properties** → **Environment Variables**
+   - Edit **Path** → Add `C:\pf`
+   - Restart terminal
+
+
+Now use `pf` from anywhere! 🚀
+
 ## Usage
 
 ```bash
