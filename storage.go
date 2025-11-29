@@ -3,19 +3,31 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 )
+
+func getDataFilePath() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return DataFile
+	}
+	exeDir := filepath.Dir(exe)
+	return filepath.Join(exeDir, DataFile)
+}
 
 func LoadServices() map[string]string {
 	services := make(map[string]string)
-	if _, err := os.Stat(DataFile); os.IsNotExist(err) {
+	dataFile := getDataFilePath()
+	if _, err := os.Stat(dataFile); os.IsNotExist(err) {
 		return services
 	}
-	data, _ := os.ReadFile(DataFile)
+	data, _ := os.ReadFile(dataFile)
 	json.Unmarshal(data, &services)
 	return services
 }
 
 func SaveServices(services map[string]string) {
 	data, _ := json.MarshalIndent(services, "", "  ")
-	os.WriteFile(DataFile, data, 0644)
+	dataFile := getDataFilePath()
+	os.WriteFile(dataFile, data, 0644)
 }
