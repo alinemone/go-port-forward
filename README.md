@@ -4,19 +4,49 @@ Minimal CLI tool for managing multiple port-forward connections.
 
 ## Install
 
-```bash
-go build -o pf.exe
-```
 
-### Global Installation (Windows)
+#### Windows
 
-1. Create directory: `C:\pf`
-2. Copy `pf.exe` to `C:\pf`
-3. Add to PATH:
+1. Build the binary:
+   ```bash
+   go build -o pf.exe
+   ```
+2. Create directory: `C:\pf`
+3. Copy `pf.exe` to `C:\pf`
+4. Add to PATH:
    - Open **System Properties** → **Environment Variables**
    - Edit **Path** → Add `C:\pf`
    - Restart terminal
 
+#### Linux
+
+1. Build the binary:
+   ```bash
+   go build -o pf
+   ```
+2. Move to system path:
+   ```bash
+   sudo mv pf /usr/local/bin/
+   ```
+3. Make executable:
+   ```bash
+   sudo chmod +x /usr/local/bin/pf
+   ```
+
+#### macOS
+
+1. Build the binary:
+   ```bash
+   go build -o pf
+   ```
+2. Move to system path:
+   ```bash
+   sudo mv pf /usr/local/bin/
+   ```
+3. Make executable:
+   ```bash
+   sudo chmod +x /usr/local/bin/pf
+   ```
 
 Now use `pf` from anywhere! 🚀
 
