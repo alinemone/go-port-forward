@@ -1,0 +1,8 @@
+
+*.so
+
+## Directory-based project format:
+.idea/
+.claude/
+services.json
+*.exe
