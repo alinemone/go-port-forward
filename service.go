@@ -23,9 +23,6 @@ func RunLoop(name, command, localPort, remotePort string) {
 		} else {
 			cmd = exec.Command("bash", "-c", command)
 		}
-		// حذف output برای نمایش تمیزتر
-		// cmd.Stdout = os.Stdout
-		// cmd.Stderr = os.Stderr
 
 		mu.Lock()
 		statuses[name] = ServiceStatus{
@@ -47,6 +44,6 @@ func RunLoop(name, command, localPort, remotePort string) {
 		}
 		mu.Unlock()
 
-		time.Sleep(2 * time.Second)
+		time.Sleep(500 * time.Millisecond)
 	}
 }
