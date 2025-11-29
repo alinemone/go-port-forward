@@ -3,9 +3,20 @@ package main
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 )
+
+func extractPorts(command string) (local, remote string, ok bool) {
+	// Find pattern like 8080:8080 or 6399:6379
+	portRegex := regexp.MustCompile(`(\d+):(\d+)`)
+	matches := portRegex.FindStringSubmatch(command)
+	if len(matches) == 3 {
+		return matches[2], matches[1], true
+	}
+	return "", "", false
+}
 
 func main() {
 	if len(os.Args) < 2 {
@@ -71,15 +82,11 @@ func main() {
 		for _, name := range names {
 			name = strings.TrimSpace(name)
 			if command, ok := services[name]; ok {
-				parts := strings.Split(command, " ")
-				ports := parts[len(parts)-1]
-				prt := strings.Split(ports, ":")
-				if len(prt) != 2 {
+				local, remote, portOk := extractPorts(command)
+				if !portOk {
 					fmt.Printf("%s✗%s Invalid port format for service %s%s%s\n", ColorRed, ColorReset, ColorCyan, name, ColorReset)
 					continue
 				}
-				remote := prt[0]
-				local := prt[1]
 				go RunLoop(name, command, local, remote)
 				validServices++
 			} else {
