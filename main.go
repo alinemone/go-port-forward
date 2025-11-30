@@ -9,7 +9,6 @@ import (
 )
 
 func extractPorts(command string) (local, remote string, ok bool) {
-	// Find pattern like 8080:8080 or 6399:6379
 	portRegex := regexp.MustCompile(`(\d+):(\d+)`)
 	matches := portRegex.FindStringSubmatch(command)
 	if len(matches) == 3 {
