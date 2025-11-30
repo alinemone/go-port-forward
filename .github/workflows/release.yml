@@ -30,22 +30,24 @@ jobs:
       - name: Build binaries
         run: |
           # Build with optimization flags to reduce false positives
-          BUILD_FLAGS="-ldflags=-s -w -trimpath"
+          # -s: strip symbol table
+          # -w: strip DWARF debug info
+          # -trimpath: remove file system paths
 
           # Windows AMD64
-          GOOS=windows GOARCH=amd64 go build $BUILD_FLAGS -o pf-windows-amd64.exe
+          GOOS=windows GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o pf-windows-amd64.exe
 
           # Linux AMD64
-          GOOS=linux GOARCH=amd64 go build $BUILD_FLAGS -o pf-linux-amd64
+          GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o pf-linux-amd64
 
           # Linux ARM64
-          GOOS=linux GOARCH=arm64 go build $BUILD_FLAGS -o pf-linux-arm64
+          GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o pf-linux-arm64
 
           # macOS Intel
-          GOOS=darwin GOARCH=amd64 go build $BUILD_FLAGS -o pf-darwin-amd64
+          GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o pf-darwin-amd64
 
           # macOS Apple Silicon
-          GOOS=darwin GOARCH=arm64 go build $BUILD_FLAGS -o pf-darwin-arm64
+          GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o pf-darwin-arm64
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
