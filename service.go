@@ -31,10 +31,8 @@ func RunLoop(name, command, localPort, remotePort string) {
 			cmd = exec.Command("bash", "-c", command)
 		}
 
-		// Start the command
 		err := cmd.Start()
 		if err != nil {
-			// Failed to start, keep status as CONNECTING or set to ERROR
 			mu.Lock()
 			statuses[name] = ServiceStatus{
 				Name:   name,
@@ -47,7 +45,6 @@ func RunLoop(name, command, localPort, remotePort string) {
 			continue
 		}
 
-		// Command started successfully, now set to ONLINE
 		mu.Lock()
 		statuses[name] = ServiceStatus{
 			Name:   name,
@@ -57,8 +54,7 @@ func RunLoop(name, command, localPort, remotePort string) {
 		}
 		mu.Unlock()
 
-		// Wait for command to finish (when connection drops)
-		cmd.Wait()
+		_ = cmd.Wait()
 
 		mu.Lock()
 		statuses[name] = ServiceStatus{

@@ -22,12 +22,13 @@ func LoadServices() map[string]string {
 		return services
 	}
 	data, _ := os.ReadFile(dataFile)
-	json.Unmarshal(data, &services)
+	_ = json.Unmarshal(data, &services)
+
 	return services
 }
 
 func SaveServices(services map[string]string) {
 	data, _ := json.MarshalIndent(services, "", "  ")
 	dataFile := getDataFilePath()
-	os.WriteFile(dataFile, data, 0644)
+	_ = os.WriteFile(dataFile, data, 0644)
 }
