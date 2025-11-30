@@ -93,6 +93,22 @@ pf d db
 
 Services are saved in `services.json` and automatically reconnect if the connection drops.
 
+## Security & Antivirus Notice
+
+**Why might antivirus flag this?**
+
+This tool executes system commands (kubectl, ssh) and manages network connections, which are common behaviors that antivirus software monitors. This is a **false positive**.
+
+**What we do:**
+- Execute port-forward commands you provide
+- Automatically reconnect dropped connections
+- Save service configurations locally
+
+**To resolve:**
+- Build from source yourself to verify the code
+- Add an exception in your antivirus software
+- The code is open source - you can audit it anytime
+
 ---
 
 **Simple. Fast. Reliable.**
