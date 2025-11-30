@@ -104,6 +104,6 @@ func DisplayStatusLoop() {
 		mu.Unlock()
 
 		fmt.Printf("\n  %sPress Ctrl+C to stop%s\n", ColorGray, ColorReset)
-		time.Sleep(3 * time.Second)
+		time.Sleep(1 * time.Second)
 	}
 }
