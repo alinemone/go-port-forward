@@ -7,11 +7,12 @@ Modern CLI tool for managing multiple port-forward connections with beautiful TU
 - 🎨 **Modern TUI** - Beautiful terminal interface powered by Bubbletea
 - ⚡ **Fast Detection** - Detects connection failures in 2-4 seconds
 - 🔄 **Auto-Reconnection** - Automatically reconnects on failure
+- 🧹 **Port Cleanup** - Automatically kills conflicting processes on ports
 - 📊 **Real-time Monitoring** - Live status updates and health checks
 - 🎯 **Error Tracking** - Smart error display with auto-clear
 - 📝 **Logging** - Rotating logs in `logs/pf.log` with full error details
 - 🎨 **Themes** - Multiple color themes (embedded in binary)
-- 🧹 **Clean Shutdown** - Properly kills all child processes on exit
+- 🛡️ **Graceful Shutdown** - Proper cleanup on exit or Ctrl+C
 - 📦 **Single Binary** - No external dependencies, themes embedded
 
 ## Install
@@ -49,7 +50,7 @@ pf <command> [arguments]
 | `list`  | `l`   | List all services |
 | `run`   | `r`   | Run services with TUI |
 | `delete`| `d`   | Delete service |
-| `themes`|       | List available themes |
+| `cleanup`| `c`  | Kill all kubectl/ssh processes |
 | `help`  | `h`   | Show help |
 
 ## Examples
@@ -74,6 +75,11 @@ pf run db,redis       # Run multiple services
 ### Delete service
 ```bash
 pf delete db
+```
+
+### Cleanup stuck ports
+```bash
+pf cleanup  # Kills all kubectl/ssh processes
 ```
 
 
@@ -132,11 +138,13 @@ themes/
 
 ## How It Works
 
-1. **Service Storage**: Services are saved in `services.json` with backward compatibility
-2. **Health Checking**: TCP port checks every 2 seconds (configurable)
-3. **Auto-Reconnection**: Automatic retry on failure with 2-second delay
-4. **Process Management**: Proper cleanup of child processes on exit
-5. **Logging**: All events logged to `logs/pf.log` with rotation
+1. **Port Conflict Handling**: Automatically detects and kills processes using target ports (3 retries)
+2. **Service Storage**: Services saved in `services.json` with backward compatibility
+3. **Health Checking**: TCP port checks every 2 seconds (configurable)
+4. **Auto-Reconnection**: Automatic retry on failure with 2-second delay
+5. **Staggered Starts**: 500ms delay between services to prevent kubectl config.lock conflicts
+6. **Process Management**: Proper cleanup of all processes on exit or Ctrl+C
+7. **Logging**: All events logged to `logs/pf.log` with rotation
 
 ## Security & Antivirus Notice
 
@@ -154,8 +162,11 @@ This tool executes system commands (kubectl, ssh) and manages network connection
 
 ## Troubleshooting
 
-### Processes not killed on exit
-Fixed in v2.0! Uses process groups for proper cleanup.
+### Port already in use
+Run `pf cleanup` or the tool auto-kills conflicting processes (3 retries with increasing delays).
+
+### kubectl config.lock errors
+Fixed! Services start with 500ms delay to prevent lock conflicts.
 
 ### Connection detection too slow
 Adjust `health_check_interval` in config.json (minimum: 1 second).
