@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -13,18 +16,24 @@ type tickMsg time.Time
 
 // UI model
 type UI struct {
-	manager  *Manager
-	services []Service
-	quitting bool
-	width    int
-	height   int
+	manager       *Manager
+	services      []Service
+	selectedIndex int
+	quitting      bool
+	width         int
+	height        int
+	viewport      viewport.Model
+	ready         bool
+	ctx           context.Context
 }
 
 // NewUI creates a new UI
-func NewUI(manager *Manager) *UI {
+func NewUI(manager *Manager, ctx context.Context) *UI {
 	return &UI{
-		manager:  manager,
-		services: []Service{},
+		manager:       manager,
+		services:      []Service{},
+		selectedIndex: 0,
+		ctx:           ctx,
 	}
 }
 
@@ -38,10 +47,36 @@ func (u *UI) Init() tea.Cmd {
 
 // Update handles messages
 func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		u.width = msg.Width
 		u.height = msg.Height
+
+		// Calculate dynamic viewport height
+		// Table: 4 (border + header + separator + bottom border) + number of services
+		// Log box border: 2 (top + bottom)
+		// Help: 3 (border + text)
+		// Total overhead: 9 + number of services
+		tableLines := 4 + len(u.services)
+		if len(u.services) == 0 {
+			tableLines = 1 // Just "No services running..."
+		}
+		overhead := tableLines + 2 + 3 // table + log border + help
+		viewportHeight := msg.Height - overhead
+		if viewportHeight < 3 {
+			viewportHeight = 3 // Minimum height
+		}
+
+		if !u.ready {
+			u.viewport = viewport.New(msg.Width, viewportHeight)
+			u.viewport.YPosition = 0
+			u.ready = true
+		} else {
+			u.viewport.Width = msg.Width
+			u.viewport.Height = viewportHeight
+		}
 
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -49,14 +84,68 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			u.quitting = true
 			u.manager.StopAll()
 			return u, tea.Quit
+
+		case "up", "k":
+			if u.selectedIndex > 0 {
+				u.selectedIndex--
+			} else {
+				// Pass to viewport for scrolling
+				u.viewport, cmd = u.viewport.Update(msg)
+			}
+
+		case "down", "j":
+			if u.selectedIndex < len(u.services)-1 {
+				u.selectedIndex++
+			} else {
+				// Pass to viewport for scrolling
+				u.viewport, cmd = u.viewport.Update(msg)
+			}
+
+		case "r":
+			// Restart selected service
+			if u.selectedIndex < len(u.services) && len(u.services) > 0 {
+				serviceName := u.services[u.selectedIndex].Name
+				u.manager.Restart(u.ctx, serviceName)
+			}
+
+		case "s":
+			// Stop selected service
+			if u.selectedIndex < len(u.services) && len(u.services) > 0 {
+				u.manager.Stop(u.services[u.selectedIndex].Name)
+			}
+
+		default:
+			// Pass other keys to viewport
+			u.viewport, cmd = u.viewport.Update(msg)
 		}
 
 	case tickMsg:
 		u.services = u.manager.GetStates()
+		// Update viewport content
+		if u.ready {
+			// Recalculate viewport height based on current number of services
+			tableLines := 4 + len(u.services)
+			if len(u.services) == 0 {
+				tableLines = 1
+			}
+			overhead := tableLines + 2 + 3 // table + log border + help
+			viewportHeight := u.height - overhead
+			if viewportHeight < 3 {
+				viewportHeight = 3
+			}
+			u.viewport.Height = viewportHeight
+
+			u.viewport.SetContent(renderCombinedLogsContent(u.services))
+			u.viewport.GotoBottom()
+		}
+		// Adjust selected index if needed
+		if u.selectedIndex >= len(u.services) && len(u.services) > 0 {
+			u.selectedIndex = len(u.services) - 1
+		}
 		return u, tickCmd()
 	}
 
-	return u, nil
+	return u, cmd
 }
 
 // View renders the UI
@@ -65,229 +154,257 @@ func (u *UI) View() string {
 		return renderShutdown()
 	}
 
+	if !u.ready {
+		return "Initializing..."
+	}
+
 	var sections []string
 
-	// Header
-	sections = append(sections, renderHeader())
-
-	// Services Table
+	// Services Table (compact)
 	if len(u.services) == 0 {
 		sections = append(sections, renderEmpty())
 	} else {
-		sections = append(sections, renderServicesTable(u.services))
+		sections = append(sections, renderCompactServicesTable(u.services, u.selectedIndex, u.width))
 	}
 
-	// Error section
-	errorSection := renderErrors(u.services)
-	if errorSection != "" {
-		sections = append(sections, errorSection)
-	}
+	// Scrollable logs with border (full width)
+	logBox := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#6FFFB0")).
+		Width(u.width - 2).
+		Render(u.viewport.View())
+	sections = append(sections, logBox)
 
-	// Footer
-	sections = append(sections, renderFooter())
+	// Help always at bottom (full width)
+	sections = append(sections, renderCompactHelp(u.width))
 
 	return lipgloss.JoinVertical(lipgloss.Left, sections...)
 }
 
-// Glass styles
+// Styles
 var (
-	glassHeader = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("#E0F7FF")).
-			Background(lipgloss.Color("#0A2540")).
-			Padding(1, 4).
-			MarginBottom(1).
-			Width(100).
-			Align(lipgloss.Center).
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("#4DD4FF"))
-
-	glassTable = lipgloss.NewStyle().
+	compactTable = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color("#4A90E2")).
-			Background(lipgloss.Color("#0D1B2A")).
-			Padding(1, 2).
-			MarginBottom(1).
-			Width(100)
+			Padding(0, 1)
 
-	tableHeaderStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#4DD4FF")).
-				Background(lipgloss.Color("#0D1B2A")).
-				Bold(true)
-
-	rowHealthy = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#6FFFB0")).
-			Background(lipgloss.Color("#0D1B2A"))
-
-	rowConnecting = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#FFE66D")).
-			Background(lipgloss.Color("#0D1B2A"))
-
-	rowError = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#FF6B6B")).
-			Background(lipgloss.Color("#0D1B2A"))
-
-	cellName = lipgloss.NewStyle().
-			Width(20).
-			Background(lipgloss.Color("#0D1B2A")).
-			Bold(true)
-
-	cellStatus = lipgloss.NewStyle().
-			Width(15).
-			Background(lipgloss.Color("#0D1B2A")).
-			Bold(true)
-
-	cellPort = lipgloss.NewStyle().
-			Width(25).
-			Background(lipgloss.Color("#0D1B2A")).
-			Foreground(lipgloss.Color("#8B9BAA"))
-
-	glassErrorBox = lipgloss.NewStyle().
-			Border(lipgloss.ThickBorder()).
-			BorderForeground(lipgloss.Color("#FF6B6B")).
-			Background(lipgloss.Color("#1A0A0A")).
-			Padding(1, 2).
-			MarginTop(1).
-			MarginBottom(1).
-			Width(100)
-
-	footerStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#4A90E2")).
-			MarginTop(1).
-			Italic(true)
+	helpBorder = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("#4DD4FF")).
+			Padding(0, 1)
 )
-
-// renderHeader renders glassmorphic header
-func renderHeader() string {
-	title := "✦ PORT FORWARD MANAGER ✦"
-	return glassHeader.Render(title)
-}
 
 // renderEmpty renders empty state
 func renderEmpty() string {
 	emptyStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#6B8E99")).
-		Italic(true).
-		MarginLeft(2).
-		MarginTop(1).
-		MarginBottom(1)
+		Foreground(lipgloss.Color("#808080")).
+		Italic(true)
 	return emptyStyle.Render("⚬ No services running...")
 }
 
-// renderServicesTable renders services as a table
-func renderServicesTable(services []Service) string {
+// renderCompactServicesTable renders a compact services table
+func renderCompactServicesTable(services []Service, selectedIndex int, width int) string {
 	var rows []string
 
-	// Table header
-	header := lipgloss.JoinHorizontal(
-		lipgloss.Top,
-		tableHeaderStyle.Render(cellStatus.Render("STATUS")),
-		tableHeaderStyle.Render(cellName.Render("SERVICE")),
-		tableHeaderStyle.Render(cellPort.Render("PORT")),
-	)
+	// Compact header
+	header := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#FFFFFF")).
+		Bold(true).
+		Render("SERVICE       STATUS       UPTIME   RESTARTS")
+
 	rows = append(rows, header)
 
-	// Separator
-	separator := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#4A90E2")).
-		Background(lipgloss.Color("#0D1B2A")).
-		Render(strings.Repeat("─", 60))
-	rows = append(rows, separator)
+	// Separator matches terminal width
+	sepWidth := width - 6 // subtract border and padding
+	if sepWidth < 50 {
+		sepWidth = 50
+	}
+	rows = append(rows, strings.Repeat("─", sepWidth))
 
 	// Service rows
-	for _, svc := range services {
-		rows = append(rows, renderServiceRow(svc))
+	for i, svc := range services {
+		var statusIcon, statusText string
+		var statusColor lipgloss.Color
+
+		highlight := "  "
+		if i == selectedIndex {
+			highlight = "► "
+		}
+
+		switch svc.Status {
+		case StatusHealthy:
+			statusColor = lipgloss.Color("#6FFFB0")
+			statusIcon = "●"
+			statusText = "HEALTHY"
+		case StatusConnecting:
+			statusColor = lipgloss.Color("#FFE66D")
+			statusIcon = "◐"
+			statusText = "CONNECTING"
+		case StatusError:
+			statusColor = lipgloss.Color("#FF6B6B")
+			statusIcon = "✗"
+			statusText = "ERROR"
+		}
+
+		uptime := formatUptime(svc.StartTime)
+
+		// Build row parts
+		name := fmt.Sprintf("%-12s", svc.Name)
+		status := fmt.Sprintf("%s %-10s", statusIcon, statusText)
+		uptimeStr := fmt.Sprintf("%-8s", uptime)
+		restarts := fmt.Sprintf("%d", svc.ReconnectCount)
+
+		// Style each part
+		styledName := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#E0E0E0")).
+			Bold(true).
+			Render(name)
+
+		styledStatus := lipgloss.NewStyle().
+			Foreground(statusColor).
+			Render(status)
+
+		styledUptime := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#C0C0C0")).
+			Render(uptimeStr)
+
+		styledRestarts := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#C0C0C0")).
+			Render(restarts)
+
+		// Combine
+		row := highlight + styledName + " " + styledStatus + " " + styledUptime + " " + styledRestarts
+
+		rows = append(rows, row)
 	}
 
 	table := lipgloss.JoinVertical(lipgloss.Left, rows...)
-	return glassTable.Render(table)
+
+	// Apply border with matching width
+	style := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#4A90E2")).
+		Padding(0, 1).
+		Width(width - 2)
+
+	return style.Render(table)
 }
 
-// renderServiceRow renders a single service row
-func renderServiceRow(svc Service) string {
-	var rowStyle lipgloss.Style
-	var statusIcon, statusText string
-
-	switch svc.Status {
-	case StatusHealthy:
-		rowStyle = rowHealthy
-		statusIcon = "●"
-		statusText = "HEALTHY"
-	case StatusConnecting:
-		rowStyle = rowConnecting
-		statusIcon = "◐"
-		statusText = "CONNECTING"
-	case StatusError:
-		rowStyle = rowError
-		statusIcon = "✗"
-		statusText = "ERROR"
+// formatUptime formats duration since start time
+func formatUptime(startTime time.Time) string {
+	if startTime.IsZero() {
+		return "-"
 	}
 
-	// Format cells
-	statusCell := rowStyle.Render(cellStatus.Render(fmt.Sprintf("%s %s", statusIcon, statusText)))
-	nameCell := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#4DD4FF")).
-		Background(lipgloss.Color("#0D1B2A")).
-		Bold(true).
-		Render(cellName.Render(svc.Name))
-	portCell := cellPort.Render(fmt.Sprintf("%s → %s", svc.LocalPort, svc.RemotePort))
+	duration := time.Since(startTime)
 
-	return lipgloss.JoinHorizontal(lipgloss.Top, statusCell, nameCell, portCell)
+	hours := int(duration.Hours())
+	minutes := int(duration.Minutes()) % 60
+	seconds := int(duration.Seconds()) % 60
+
+	if hours > 0 {
+		return fmt.Sprintf("%dh %dm", hours, minutes)
+	} else if minutes > 0 {
+		return fmt.Sprintf("%dm %ds", minutes, seconds)
+	}
+	return fmt.Sprintf("%ds", seconds)
 }
 
-// renderErrors renders the error section
-func renderErrors(services []Service) string {
-	var errors []string
+// renderCombinedLogsContent renders logs content for viewport
+func renderCombinedLogsContent(services []Service) string {
+	var content strings.Builder
 
+	// Collect all logs with service name
+	type LogWithService struct {
+		ServiceName string
+		Entry       LogEntry
+	}
+
+	var allLogs []LogWithService
 	for _, svc := range services {
-		if svc.Error != "" {
-			errorLine := lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#FF6B6B")).
-				Bold(true).
-				Render(fmt.Sprintf("⚠ %s", svc.Name))
-
-			errorMsg := lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#FFB4B4")).
-				Render(fmt.Sprintf("  └─ %s", svc.Error))
-
-			errors = append(errors, errorLine+"\n"+errorMsg)
+		for _, log := range svc.LogHistory {
+			allLogs = append(allLogs, LogWithService{
+				ServiceName: svc.Name,
+				Entry:       log,
+			})
 		}
 	}
 
-	if len(errors) == 0 {
-		return ""
+	// Sort by time
+	sort.Slice(allLogs, func(i, j int) bool {
+		return allLogs[i].Entry.Time.Before(allLogs[j].Entry.Time)
+	})
+
+	if len(allLogs) == 0 {
+		content.WriteString(lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#808080")).
+			Italic(true).
+			Render("No logs yet..."))
+	} else {
+		for i := 0; i < len(allLogs); i++ {
+			log := allLogs[i]
+			timestamp := log.Entry.Time.Format("15:04:05")
+
+			// Service name (max 8 chars)
+			serviceName := log.ServiceName
+			if len(serviceName) > 8 {
+				serviceName = serviceName[:8]
+			}
+
+			// Message style based on error or info
+			var msgColor lipgloss.Color
+			if log.Entry.IsError {
+				msgColor = lipgloss.Color("#FF6B6B")
+			} else if strings.Contains(log.Entry.Message, "━━━━") {
+				msgColor = lipgloss.Color("#FFE66D")
+			} else {
+				msgColor = lipgloss.Color("#E0E0E0")
+			}
+
+			// Format: [service time] message
+			nameStyled := lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#4DD4FF")).
+				Bold(true).
+				Render(fmt.Sprintf("%-8s", serviceName))
+
+			timeStyled := lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#808080")).
+				Render(timestamp)
+
+			msgStyled := lipgloss.NewStyle().
+				Foreground(msgColor).
+				Render(log.Entry.Message)
+
+			logLine := fmt.Sprintf("[%s %s] %s", nameStyled, timeStyled, msgStyled)
+
+			content.WriteString(logLine)
+			content.WriteString("\n")
+		}
 	}
 
-	var content strings.Builder
-
-	titleStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#FF6B6B")).
-		Bold(true).
-		Underline(true)
-
-	content.WriteString(titleStyle.Render("ERROR LOG"))
-	content.WriteString("\n\n")
-
-	for _, err := range errors {
-		content.WriteString(err)
-		content.WriteString("\n")
-	}
-
-	return glassErrorBox.Render(content.String())
+	return content.String()
 }
 
-// renderFooter renders the footer
-func renderFooter() string {
-	return footerStyle.Render("◆ Press 'q' or Ctrl+C to quit ◆")
+// renderCompactHelp renders compact help at bottom
+func renderCompactHelp(width int) string {
+	help := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#808080")).
+		Render("↑↓:navigate/scroll • r:restart • s:stop • q:quit")
+
+	style := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#4DD4FF")).
+		Padding(0, 1).
+		Width(width - 2)
+
+	return style.Render(help)
 }
 
 // renderShutdown renders shutdown message
 func renderShutdown() string {
 	shutdownStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#6FFFB0")).
-		Bold(true).
-		MarginTop(2).
-		MarginBottom(2)
+		Bold(true)
 
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).

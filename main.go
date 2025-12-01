@@ -138,7 +138,7 @@ func handleRun() {
 	}
 
 	// Run TUI
-	ui := NewUI(manager)
+	ui := NewUI(manager, ctx)
 	p := tea.NewProgram(ui, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {
@@ -184,10 +184,6 @@ func handleCleanup() {
 
 func printHelp() {
 	help := `
-╔════════════════════════════════════════════════════╗
-║         Port Forward Manager v2.0                  ║
-╚════════════════════════════════════════════════════╝
-
 Usage:
   pf <command> [arguments]
 
