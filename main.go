@@ -10,8 +10,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/alinemone/go-port-forward/internal/app"
-	"github.com/alinemone/go-port-forward/internal/storage"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func main() {
@@ -23,27 +22,21 @@ func main() {
 	cmd := os.Args[1]
 
 	switch cmd {
-	case "a", "add":
+	case "a", "add", "-a", "-add", "--a", "--add":
 		handleAdd()
-
-	case "l", "list":
+	case "l", "list", "-l", "-list", "--l", "--list":
 		handleList()
-
-	case "r", "run":
+	case "r", "run", "-r", "-run", "--r", "--run":
 		handleRun()
-
-	case "d", "delete", "rm":
+	case "d", "delete", "rm", "-d", "-delete", "--d", "--delete":
 		handleDelete()
-
-	case "c", "cleanup":
+	case "c", "cleanup", "-c", "-cleanup", "--c", "--cleanup":
 		handleCleanup()
-
 	case "h", "help", "--help", "-h":
 		printHelp()
-
 	default:
 		fmt.Printf("Unknown command: %s\n", cmd)
-		fmt.Println("Run 'pf help' for usage information.")
+		fmt.Println("Run 'pf help' for usage")
 		os.Exit(1)
 	}
 }
@@ -56,36 +49,32 @@ func handleAdd() {
 	}
 
 	name := os.Args[2]
-	command := os.Args[3]
+	command := strings.Join(os.Args[3:], " ")
 
-	// Join additional args if provided
-	if len(os.Args) >= 5 {
-		command = command + " " + strings.Join(os.Args[4:], " ")
-	}
-
-	stor := storage.New()
-	if err := stor.AddService(name, command); err != nil {
+	storage := NewStorage()
+	if err := storage.Add(name, command); err != nil {
 		fmt.Printf("Error: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Printf("✓ Service '%s' added successfully!\n", name)
+	fmt.Printf("✓ Service '%s' added\n", name)
 }
 
 func handleList() {
-	stor := storage.New()
-	services, err := stor.LoadServices()
+	storage := NewStorage()
+	services, err := storage.Load()
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		os.Exit(1)
 	}
 
 	if len(services) == 0 {
-		fmt.Println("No services found.")
+		fmt.Println("No services found")
 		return
 	}
 
-	fmt.Println("\nSaved Services:\n")
+	fmt.Println("\nServices:")
+	fmt.Println()
 
 	names := make([]string, 0, len(services))
 	for name := range services {
@@ -94,16 +83,12 @@ func handleList() {
 	sort.Strings(names)
 
 	for i, name := range names {
-		svc := services[name]
-		cmd := svc.Command
-		if len(cmd) > 60 {
-			cmd = cmd[:57] + "..."
+		cmd := services[name]
+		if len(cmd) > 70 {
+			cmd = cmd[:67] + "..."
 		}
 		fmt.Printf("  %d. %s\n", i+1, name)
 		fmt.Printf("     → %s\n", cmd)
-		if svc.Description != "" {
-			fmt.Printf("     %s\n", svc.Description)
-		}
 	}
 	fmt.Println()
 }
@@ -119,15 +104,11 @@ func handleRun() {
 		serviceNames[i] = strings.TrimSpace(name)
 	}
 
-	// Create app
-	application, err := app.New()
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		os.Exit(1)
-	}
-	defer application.Close()
+	// Create manager
+	storage := NewStorage()
+	manager := NewManager(storage)
 
-	// Setup signal handling for graceful shutdown
+	// Setup signal handling
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -136,24 +117,36 @@ func handleRun() {
 
 	go func() {
 		<-sigChan
-		fmt.Println("\nShutting down gracefully...")
 		cancel()
 	}()
 
-	// Validate services exist
-	stor := application.GetStorage()
+	// Validate and start services
 	for _, name := range serviceNames {
-		if _, err := stor.GetService(name); err != nil {
+		if _, err := storage.Get(name); err != nil {
 			fmt.Printf("Error: Service '%s' not found\n", name)
 			os.Exit(1)
 		}
 	}
 
-	// Run with TUI
-	if err := application.Run(ctx, serviceNames); err != nil {
+	// Start services
+	for _, name := range serviceNames {
+		if err := manager.Start(ctx, name); err != nil {
+			fmt.Printf("Error starting '%s': %v\n", name, err)
+			os.Exit(1)
+		}
+	}
+
+	// Run TUI
+	ui := NewUI(manager)
+	p := tea.NewProgram(ui, tea.WithAltScreen())
+
+	if _, err := p.Run(); err != nil {
 		fmt.Printf("Error: %v\n", err)
 		os.Exit(1)
 	}
+
+	// Cleanup
+	manager.StopAll()
 }
 
 func handleDelete() {
@@ -164,61 +157,53 @@ func handleDelete() {
 
 	name := os.Args[2]
 
-	stor := storage.New()
-	if err := stor.DeleteService(name); err != nil {
+	storage := NewStorage()
+	if err := storage.Delete(name); err != nil {
 		fmt.Printf("Error: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Printf("✓ Service '%s' deleted successfully!\n", name)
+	fmt.Printf("✓ Service '%s' deleted\n", name)
 }
 
 func handleCleanup() {
-	fmt.Println("Cleaning up all kubectl and ssh port-forward processes...")
+	fmt.Println("Cleaning up kubectl and ssh processes...")
 
-	// Try to kill kubectl processes
 	exec.Command("taskkill", "/F", "/IM", "kubectl.exe").Run()
-
-	// Try to kill ssh processes
 	exec.Command("taskkill", "/F", "/IM", "ssh.exe").Run()
 
-	fmt.Println("✓ Cleanup complete!")
-	fmt.Println("Note: This kills ALL kubectl and ssh processes on your system.")
+	fmt.Println("✓ Cleanup complete")
+	fmt.Println("Note: This kills ALL kubectl and ssh processes")
 }
 
 func printHelp() {
 	help := `
-╔═══════════════════════════════════════════════════════════╗
-║              Port Forward Manager v2.0                    ║
-╚═══════════════════════════════════════════════════════════╝
+╔════════════════════════════════════════════════════╗
+║         Port Forward Manager v2.0                  ║
+╚════════════════════════════════════════════════════╝
 
 Usage:
   pf <command> [arguments]
 
 Commands:
-  a, add <name> <command>       Add new service
-  l, list                       List all services
-  r, run <name1,name2,...>      Run services with TUI
-  d, delete <name>              Delete service
-  c, cleanup                    Kill all kubectl/ssh processes
-  h, help                       Show this help
+  a, add <name> <command>      Add new service
+  l, list                      List all services
+  r, run <name1,name2,...>     Run services with TUI
+  d, delete <name>             Delete service
+  c, cleanup                   Kill all kubectl/ssh processes
+  h, help                      Show this help
 
 Examples:
-  pf add db "kubectl -n prod port-forward service/postgres 5432:5432"
+  pf add db "kubectl port-forward service/postgres 5432:5432"
+  pf run db
   pf run db,redis
   pf delete db
 
 Features:
-  • Modern TUI with real-time updates
-  • Automatic health checking (2-4 seconds detection)
-  • Auto-reconnection on failure
-  • Error tracking with auto-clear
-  • Logging to logs/pf.log
-
-Configuration:
-  Edit config.json to customize settings
-  Place in same directory as executable
-
+  • Simple TUI with real-time status
+  • Auto-reconnect on failure
+  • Error display in terminal
+  • Clean shutdown on quit
 `
 	fmt.Println(help)
 }
