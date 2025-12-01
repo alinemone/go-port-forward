@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"regexp"
@@ -21,29 +20,104 @@ const (
 	StatusError      = "error"
 )
 
+// ErrorEntry represents a single error event
+type ErrorEntry struct {
+	Time    time.Time
+	Message string
+}
+
+// LogEntry represents a log message (stdout/stderr)
+type LogEntry struct {
+	Time    time.Time
+	Message string
+	IsError bool
+}
+
 // Service represents a running service
 type Service struct {
-	Name       string
-	Command    string
-	LocalPort  string
-	RemotePort string
-	Status     string
-	Error      string
-	cancel     context.CancelFunc
-	mu         sync.RWMutex
+	Name           string
+	Command        string
+	LocalPort      string
+	RemotePort     string
+	Status         string
+	Error          string
+	StartTime      time.Time
+	ReconnectCount int
+	ErrorHistory   []ErrorEntry
+	LogHistory     []LogEntry
+	cancel         context.CancelFunc
+	mu             sync.RWMutex
 }
 
 // GetSnapshot returns a copy of service state
 func (s *Service) GetSnapshot() Service {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+
+	// Copy error history
+	errorHistoryCopy := make([]ErrorEntry, len(s.ErrorHistory))
+	copy(errorHistoryCopy, s.ErrorHistory)
+
+	// Copy log history
+	logHistoryCopy := make([]LogEntry, len(s.LogHistory))
+	copy(logHistoryCopy, s.LogHistory)
+
 	return Service{
-		Name:       s.Name,
-		Command:    s.Command,
-		LocalPort:  s.LocalPort,
-		RemotePort: s.RemotePort,
-		Status:     s.Status,
-		Error:      s.Error,
+		Name:           s.Name,
+		Command:        s.Command,
+		LocalPort:      s.LocalPort,
+		RemotePort:     s.RemotePort,
+		Status:         s.Status,
+		Error:          s.Error,
+		StartTime:      s.StartTime,
+		ReconnectCount: s.ReconnectCount,
+		ErrorHistory:   errorHistoryCopy,
+		LogHistory:     logHistoryCopy,
+	}
+}
+
+// addError adds an error to history (keeps last 10)
+func (s *Service) addError(msg string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entry := ErrorEntry{
+		Time:    time.Now(),
+		Message: msg,
+	}
+
+	s.ErrorHistory = append(s.ErrorHistory, entry)
+
+	// Keep only last 10 errors
+	if len(s.ErrorHistory) > 10 {
+		s.ErrorHistory = s.ErrorHistory[len(s.ErrorHistory)-10:]
+	}
+
+	s.Error = msg
+	s.Status = StatusError
+}
+
+// addLog adds a log entry to history (keeps last 100)
+func (s *Service) addLog(msg string, isError bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Skip empty messages
+	if strings.TrimSpace(msg) == "" {
+		return
+	}
+
+	entry := LogEntry{
+		Time:    time.Now(),
+		Message: msg,
+		IsError: isError,
+	}
+
+	s.LogHistory = append(s.LogHistory, entry)
+
+	// Keep last 100 logs for full transparency
+	if len(s.LogHistory) > 100 {
+		s.LogHistory = s.LogHistory[len(s.LogHistory)-100:]
 	}
 }
 
@@ -83,12 +157,16 @@ func (m *Manager) Start(ctx context.Context, name string) error {
 	// Create service
 	svcCtx, cancel := context.WithCancel(ctx)
 	svc := &Service{
-		Name:       name,
-		Command:    command,
-		LocalPort:  localPort,
-		RemotePort: remotePort,
-		Status:     StatusConnecting,
-		cancel:     cancel,
+		Name:           name,
+		Command:        command,
+		LocalPort:      localPort,
+		RemotePort:     remotePort,
+		Status:         StatusConnecting,
+		StartTime:      time.Now(),
+		ReconnectCount: 0,
+		ErrorHistory:   make([]ErrorEntry, 0),
+		LogHistory:     make([]LogEntry, 0),
+		cancel:         cancel,
 	}
 
 	// Store service
@@ -104,15 +182,26 @@ func (m *Manager) Start(ctx context.Context, name string) error {
 
 // runService runs a service with auto-reconnect
 func (m *Manager) runService(ctx context.Context, svc *Service) {
-	// Start ONE health check for this service
-	go m.healthCheck(ctx, svc)
+	isFirstRun := true
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		default:
+			// Increment reconnect count (except first run)
+			if !isFirstRun {
+				svc.mu.Lock()
+				svc.ReconnectCount++
+				svc.mu.Unlock()
+
+				// Add reconnect log for transparency
+				svc.addLog(fmt.Sprintf("━━━━ RECONNECTING (attempt #%d) ━━━━", svc.ReconnectCount), false)
+			}
+			isFirstRun = false
+
 			m.runOnce(ctx, svc)
+
 			// Wait 2 seconds before reconnecting
 			select {
 			case <-ctx.Done():
@@ -144,63 +233,78 @@ func (m *Manager) runOnce(ctx context.Context, svc *Service) {
 
 	// Start process
 	if err := cmd.Start(); err != nil {
-		svc.mu.Lock()
-		svc.Status = StatusError
-		svc.Error = fmt.Sprintf("Start failed: %v", err)
-		svc.mu.Unlock()
+		errorMsg := fmt.Sprintf("Start failed: %v", err)
+		svc.addError(errorMsg)
 		fmt.Fprintf(os.Stderr, "[%s] ERROR: %v\n", svc.Name, err)
 		return
 	}
 
 	// Monitor output in background
-	go m.monitorOutput(svc, stdoutPipe, stderrPipe)
+	go m.monitorOutput(svc, stdoutPipe, stderrPipe, false) // stdout
+	go m.monitorOutput(svc, stderrPipe, nil, true)         // stderr
 
 	// Wait for process to exit
 	err := cmd.Wait()
 	if err != nil && ctx.Err() == nil {
-		svc.mu.Lock()
-		svc.Status = StatusError
-		svc.Error = fmt.Sprintf("Process died: %v", err)
-		svc.mu.Unlock()
+		errorMsg := fmt.Sprintf("Process died: %v", err)
+		svc.addError(errorMsg)
 		fmt.Fprintf(os.Stderr, "[%s] ERROR: Process died: %v\n", svc.Name, err)
 	}
 }
 
-// monitorOutput monitors stdout/stderr for errors
-func (m *Manager) monitorOutput(svc *Service, stdout, stderr interface{}) {
-	if stderr == nil {
+// monitorOutput monitors stdout/stderr and logs messages
+func (m *Manager) monitorOutput(svc *Service, pipe interface{}, _ interface{}, isError bool) {
+	if pipe == nil {
 		return
 	}
 
 	buf := make([]byte, 8192)
-	reader := stderr.(interface{ Read([]byte) (int, error) })
+	reader := pipe.(interface{ Read([]byte) (int, error) })
 
 	for {
 		n, err := reader.Read(buf)
 		if n > 0 {
 			output := strings.TrimSpace(string(buf[:n]))
-			lowerOutput := strings.ToLower(output)
 
-			// Check for common error patterns
-			isError := strings.Contains(lowerOutput, "error") ||
-				strings.Contains(lowerOutput, "failed") ||
-				strings.Contains(lowerOutput, "unable to") ||
-				strings.Contains(lowerOutput, "cannot") ||
-				strings.Contains(lowerOutput, "denied") ||
-				strings.Contains(lowerOutput, "refused") ||
-				strings.Contains(lowerOutput, "not found")
-
-			if isError {
-				// Extract meaningful error message
-				errorMsg := extractErrorMessage(output)
-
-				svc.mu.Lock()
-				if svc.Status != StatusError {
-					svc.Status = StatusError
-					svc.Error = errorMsg
-					fmt.Fprintf(os.Stderr, "[%s] ERROR: %s\n", svc.Name, errorMsg)
+			// Split by lines to handle multiple messages
+			lines := strings.Split(output, "\n")
+			for _, line := range lines {
+				line = strings.TrimSpace(line)
+				if line == "" {
+					continue
 				}
-				svc.mu.Unlock()
+
+				// Add to log history
+				svc.addLog(line, isError)
+
+				// Check if "Forwarding from" appears - means service is healthy
+				if strings.Contains(line, "Forwarding from") {
+					svc.mu.Lock()
+					if svc.Status != StatusHealthy {
+						svc.Status = StatusHealthy
+						svc.Error = ""
+					}
+					svc.mu.Unlock()
+				}
+
+				// Check if it's an error (for stderr)
+				if isError {
+					lowerOutput := strings.ToLower(line)
+					isErrorMsg := strings.Contains(lowerOutput, "error") ||
+						strings.Contains(lowerOutput, "failed") ||
+						strings.Contains(lowerOutput, "unable to") ||
+						strings.Contains(lowerOutput, "cannot") ||
+						strings.Contains(lowerOutput, "denied") ||
+						strings.Contains(lowerOutput, "refused") ||
+						strings.Contains(lowerOutput, "not found") ||
+						strings.Contains(lowerOutput, "lost connection")
+
+					if isErrorMsg {
+						errorMsg := extractErrorMessage(line)
+						svc.addError(errorMsg)
+						fmt.Fprintf(os.Stderr, "[%s] ERROR: %s\n", svc.Name, errorMsg)
+					}
+				}
 			}
 		}
 		if err != nil {
@@ -222,48 +326,6 @@ func extractErrorMessage(output string) string {
 	return output
 }
 
-// healthCheck checks if port is open
-func (m *Manager) healthCheck(ctx context.Context, svc *Service) {
-	// Wait a bit for service to start
-	time.Sleep(2 * time.Second)
-
-	ticker := time.NewTicker(3 * time.Second)
-	defer ticker.Stop()
-
-	failCount := 0
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			// Check if port is open
-			conn, err := net.DialTimeout("tcp", "localhost:"+svc.LocalPort, 1*time.Second)
-			if err != nil {
-				failCount++
-				if failCount >= 2 {
-					svc.mu.Lock()
-					if svc.Status != StatusError {
-						svc.Status = StatusError
-						svc.Error = "Port not accessible"
-						fmt.Fprintf(os.Stderr, "[%s] ERROR: Port %s not accessible\n", svc.Name, svc.LocalPort)
-					}
-					svc.mu.Unlock()
-				}
-			} else {
-				conn.Close()
-				failCount = 0
-				svc.mu.Lock()
-				if svc.Status != StatusHealthy {
-					svc.Status = StatusHealthy
-					svc.Error = ""
-				}
-				svc.mu.Unlock()
-			}
-		}
-	}
-}
-
 // Stop stops a service
 func (m *Manager) Stop(name string) {
 	m.mu.Lock()
@@ -283,6 +345,18 @@ func (m *Manager) Stop(name string) {
 	// Cleanup port
 	time.Sleep(300 * time.Millisecond)
 	_ = killProcessUsingPort(svc.LocalPort)
+}
+
+// Restart restarts a service
+func (m *Manager) Restart(ctx context.Context, name string) error {
+	// Stop the service
+	m.Stop(name)
+
+	// Wait a bit
+	time.Sleep(500 * time.Millisecond)
+
+	// Start again
+	return m.Start(ctx, name)
 }
 
 // StopAll stops all services
