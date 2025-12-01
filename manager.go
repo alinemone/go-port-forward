@@ -104,6 +104,9 @@ func (m *Manager) Start(ctx context.Context, name string) error {
 
 // runService runs a service with auto-reconnect
 func (m *Manager) runService(ctx context.Context, svc *Service) {
+	// Start ONE health check for this service
+	go m.healthCheck(ctx, svc)
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -151,9 +154,6 @@ func (m *Manager) runOnce(ctx context.Context, svc *Service) {
 
 	// Monitor output in background
 	go m.monitorOutput(svc, stdoutPipe, stderrPipe)
-
-	// Start health check
-	go m.healthCheck(ctx, svc)
 
 	// Wait for process to exit
 	err := cmd.Wait()
