@@ -158,6 +158,25 @@ func (u *UI) View() string {
 		return "Initializing..."
 	}
 
+	// Ensure viewport has correct dimensions before rendering
+	if u.width > 0 && u.height > 0 {
+		tableLines := 4 + len(u.services)
+		if len(u.services) == 0 {
+			tableLines = 1
+		}
+		overhead := tableLines + 2 + 3
+		viewportHeight := u.height - overhead
+		if viewportHeight < 3 {
+			viewportHeight = 3
+		}
+		if u.viewport.Height != viewportHeight {
+			u.viewport.Height = viewportHeight
+		}
+		if u.viewport.Width != u.width {
+			u.viewport.Width = u.width
+		}
+	}
+
 	var sections []string
 
 	// Services Table (compact)
@@ -168,10 +187,14 @@ func (u *UI) View() string {
 	}
 
 	// Scrollable logs with border (full width)
+	logBoxWidth := u.width - 2
+	if logBoxWidth < 58 {
+		logBoxWidth = 58 // Minimum width
+	}
 	logBox := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("#6FFFB0")).
-		Width(u.width - 2).
+		Width(logBoxWidth).
 		Render(u.viewport.View())
 	sections = append(sections, logBox)
 
@@ -180,19 +203,6 @@ func (u *UI) View() string {
 
 	return lipgloss.JoinVertical(lipgloss.Left, sections...)
 }
-
-// Styles
-var (
-	compactTable = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("#4A90E2")).
-			Padding(0, 1)
-
-	helpBorder = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("#4DD4FF")).
-			Padding(0, 1)
-)
 
 // renderEmpty renders empty state
 func renderEmpty() string {
@@ -204,6 +214,11 @@ func renderEmpty() string {
 
 // renderCompactServicesTable renders a compact services table
 func renderCompactServicesTable(services []Service, selectedIndex int, width int) string {
+	// Ensure minimum width
+	if width < 60 {
+		width = 60
+	}
+
 	var rows []string
 
 	// Compact header
@@ -214,15 +229,19 @@ func renderCompactServicesTable(services []Service, selectedIndex int, width int
 
 	rows = append(rows, header)
 
-	// Separator matches terminal width
-	sepWidth := width - 6 // subtract border and padding
+	// Separator matches available width (accounting for border and padding)
+	sepWidth := width - 6 // subtract border (2) and padding (4)
 	if sepWidth < 50 {
 		sepWidth = 50
+	}
+	if sepWidth > 200 {
+		sepWidth = 200 // Maximum separator width
 	}
 	rows = append(rows, strings.Repeat("─", sepWidth))
 
 	// Service rows
-	for i, svc := range services {
+	for i := range services {
+		svc := &services[i]
 		var statusIcon, statusText string
 		var statusColor lipgloss.Color
 
@@ -321,7 +340,8 @@ func renderCombinedLogsContent(services []Service) string {
 	}
 
 	var allLogs []LogWithService
-	for _, svc := range services {
+	for i := range services {
+		svc := &services[i]
 		for _, log := range svc.LogHistory {
 			allLogs = append(allLogs, LogWithService{
 				ServiceName: svc.Name,
@@ -351,11 +371,17 @@ func renderCombinedLogsContent(services []Service) string {
 				serviceName = serviceName[:8]
 			}
 
+			// Truncate very long messages to prevent layout breaking
+			message := log.Entry.Message
+			if len(message) > 200 {
+				message = message[:197] + "..."
+			}
+
 			// Message style based on error or info
 			var msgColor lipgloss.Color
 			if log.Entry.IsError {
 				msgColor = lipgloss.Color("#FF6B6B")
-			} else if strings.Contains(log.Entry.Message, "━━━━") {
+			} else if strings.Contains(message, "━━━━") {
 				msgColor = lipgloss.Color("#FFE66D")
 			} else {
 				msgColor = lipgloss.Color("#E0E0E0")
@@ -373,7 +399,7 @@ func renderCombinedLogsContent(services []Service) string {
 
 			msgStyled := lipgloss.NewStyle().
 				Foreground(msgColor).
-				Render(log.Entry.Message)
+				Render(message)
 
 			logLine := fmt.Sprintf("[%s %s] %s", nameStyled, timeStyled, msgStyled)
 
@@ -387,6 +413,11 @@ func renderCombinedLogsContent(services []Service) string {
 
 // renderCompactHelp renders compact help at bottom
 func renderCompactHelp(width int) string {
+	// Ensure minimum width
+	if width < 60 {
+		width = 60
+	}
+
 	help := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#808080")).
 		Render("↑↓:navigate/scroll • r:restart • s:stop • q:quit")
