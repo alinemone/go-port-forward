@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"runtime"
 	"sort"
 	"strings"
 	"syscall"
@@ -169,8 +170,13 @@ func handleDelete() {
 func handleCleanup() {
 	fmt.Println("Cleaning up kubectl and ssh processes...")
 
-	exec.Command("taskkill", "/F", "/IM", "kubectl.exe").Run()
-	exec.Command("taskkill", "/F", "/IM", "ssh.exe").Run()
+	if runtime.GOOS == "windows" {
+		exec.Command("taskkill", "/F", "/IM", "kubectl.exe").Run()
+		exec.Command("taskkill", "/F", "/IM", "ssh.exe").Run()
+	} else {
+		exec.Command("pkill", "-9", "kubectl").Run()
+		exec.Command("pkill", "-9", "ssh").Run()
+	}
 
 	fmt.Println("✓ Cleanup complete")
 	fmt.Println("Note: This kills ALL kubectl and ssh processes")

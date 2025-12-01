@@ -7,10 +7,10 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -129,9 +129,10 @@ func (m *Manager) runOnce(ctx context.Context, svc *Service) {
 
 	// Create command
 	var cmd *exec.Cmd
-	cmd = exec.CommandContext(ctx, "cmd", "/C", svc.Command)
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP,
+	if runtime.GOOS == "windows" {
+		cmd = exec.CommandContext(ctx, "cmd", "/C", svc.Command)
+	} else {
+		cmd = exec.CommandContext(ctx, "sh", "-c", svc.Command)
 	}
 
 	// Capture output
@@ -322,8 +323,16 @@ func (m *Manager) GetStates() []Service {
 	return states
 }
 
-// killProcessUsingPort kills processes using a port on Windows
+// killProcessUsingPort kills processes using a port
 func killProcessUsingPort(port string) error {
+	if runtime.GOOS == "windows" {
+		return killProcessUsingPortWindows(port)
+	}
+	return killProcessUsingPortUnix(port)
+}
+
+// killProcessUsingPortWindows kills processes on Windows
+func killProcessUsingPortWindows(port string) error {
 	cmd := exec.Command("netstat", "-ano")
 	output, err := cmd.Output()
 	if err != nil {
@@ -350,6 +359,26 @@ func killProcessUsingPort(port string) error {
 	for pid := range pids {
 		exec.Command("taskkill", "/F", "/T", "/PID", pid).Run()
 	}
+
+	return nil
+}
+
+// killProcessUsingPortUnix kills processes on Linux/macOS
+func killProcessUsingPortUnix(port string) error {
+	// Try lsof first
+	cmd := exec.Command("lsof", "-ti", ":"+port)
+	output, err := cmd.Output()
+	if err == nil && len(output) > 0 {
+		pids := strings.Fields(string(output))
+		for _, pid := range pids {
+			exec.Command("kill", "-9", pid).Run()
+		}
+		return nil
+	}
+
+	// Fallback to fuser
+	cmd = exec.Command("fuser", "-k", port+"/tcp")
+	cmd.Run()
 
 	return nil
 }
