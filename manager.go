@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/alinemone/go-port-forward/cert"
 )
 
 // Service status
@@ -123,16 +125,25 @@ func (s *Service) addLog(msg string, isError bool) {
 
 // Manager manages multiple services
 type Manager struct {
-	services map[string]*Service
-	storage  *Storage
-	mu       sync.RWMutex
+	services    map[string]*Service
+	storage     *Storage
+	certManager *cert.Manager
+	mu          sync.RWMutex
 }
 
 // NewManager creates a new service manager
 func NewManager(storage *Storage) *Manager {
+	certMgr, err := cert.NewManager()
+	if err != nil {
+		// Log error but continue (certificates are optional)
+		fmt.Fprintf(os.Stderr, "Warning: Failed to initialize certificate manager: %v\n", err)
+		certMgr = nil
+	}
+
 	return &Manager{
-		services: make(map[string]*Service),
-		storage:  storage,
+		services:    make(map[string]*Service),
+		storage:     storage,
+		certManager: certMgr,
 	}
 }
 
@@ -219,12 +230,23 @@ func (m *Manager) runOnce(ctx context.Context, svc *Service) {
 	svc.Error = ""
 	svc.mu.Unlock()
 
+	// Prepare command with certificate if available
+	commandStr := svc.Command
+	if m.certManager != nil {
+		if certConfig, exists := m.certManager.GetCertificate(); exists {
+			// Inject certificate flags for kubectl commands
+			if strings.Contains(commandStr, "kubectl") {
+				commandStr = injectKubectlCert(commandStr, certConfig.CertPath, certConfig.KeyPath)
+			}
+		}
+	}
+
 	// Create command
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
-		cmd = exec.CommandContext(ctx, "cmd", "/C", svc.Command)
+		cmd = exec.CommandContext(ctx, "cmd", "/C", commandStr)
 	} else {
-		cmd = exec.CommandContext(ctx, "sh", "-c", svc.Command)
+		cmd = exec.CommandContext(ctx, "sh", "-c", commandStr)
 	}
 
 	// Capture output
@@ -250,6 +272,26 @@ func (m *Manager) runOnce(ctx context.Context, svc *Service) {
 		svc.addError(errorMsg)
 		fmt.Fprintf(os.Stderr, "[%s] ERROR: Process died: %v\n", svc.Name, err)
 	}
+}
+
+// injectKubectlCert injects certificate flags into kubectl command
+func injectKubectlCert(command, certPath, keyPath string) string {
+	// Check if cert flags already exist
+	if strings.Contains(command, "--client-certificate") {
+		return command
+	}
+
+	// Find position after "kubectl" to inject flags
+	re := regexp.MustCompile(`(kubectl\s+)`)
+	if !re.MatchString(command) {
+		return command
+	}
+
+	// Inject certificate and key flags
+	certFlags := fmt.Sprintf("--client-certificate=%s --client-key=%s ", certPath, keyPath)
+	result := re.ReplaceAllString(command, "${1}"+certFlags)
+
+	return result
 }
 
 // monitorOutput monitors stdout/stderr and logs messages

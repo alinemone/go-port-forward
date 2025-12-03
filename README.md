@@ -1,28 +1,27 @@
-# pf - Port Forward Manager v2.0
+# pf - Port Forward Manager v2.1
 
-Modern CLI tool for managing multiple port-forward connections with beautiful TUI.
+Modern CLI tool for managing multiple port-forward connections with real-time monitoring and certificate support.
 
 ## ✨ Features
 
-- 🎨 **Modern TUI** - Beautiful terminal interface powered by Bubbletea
-- ⚡ **Fast Detection** - Detects connection failures in 2-4 seconds
+- 🎨 **Simple TUI** - Clean terminal interface with real-time status
+- ⚡ **Fast & Reliable** - Detects connection failures quickly
 - 🔄 **Auto-Reconnection** - Automatically reconnects on failure
-- 🧹 **Port Cleanup** - Automatically kills conflicting processes on ports
-- 📊 **Real-time Monitoring** - Live status updates and health checks
-- 🎯 **Error Tracking** - Smart error display with auto-clear
-- 📝 **Logging** - Rotating logs in `logs/pf.log` with full error details
-- 🎨 **Themes** - Multiple color themes (embedded in binary)
+- 🧹 **Port Cleanup** - Automatically kills conflicting processes
+- 🔐 **Certificate Support** - Built-in P12 certificate handling for kubectl
+- 📊 **Real-time Monitoring** - Live status updates
 - 🛡️ **Graceful Shutdown** - Proper cleanup on exit or Ctrl+C
-- 📦 **Single Binary** - No external dependencies, themes embedded
+- 📦 **Single Binary** - No external dependencies
+- 🌍 **Cross-Platform** - Works on Windows, Linux, and macOS
 
-## Install
+## 📥 Installation
 
 ### From Source
 
 #### Windows
 ```bash
 go build -o pf.exe
-# Move to C:\pf and add to PATH
+# Optional: Move to a directory in PATH
 ```
 
 #### Linux/macOS
@@ -36,13 +35,20 @@ sudo chmod +x /usr/local/bin/pf
 
 Download pre-built binaries from [Releases](https://github.com/alinemone/go-port-forward/releases).
 
-## Usage
+## 🚀 Quick Start
 
 ```bash
-pf <command> [arguments]
+# Add a service
+pf add db "kubectl port-forward service/postgres 5432:5432"
+
+# Run the service
+pf run db
+
+# List all services
+pf list
 ```
 
-### Commands
+## 📖 Commands
 
 | Command | Alias | Description |
 |---------|-------|-------------|
@@ -51,145 +57,181 @@ pf <command> [arguments]
 | `run`   | `r`   | Run services with TUI |
 | `delete`| `d`   | Delete service |
 | `cleanup`| `c`  | Kill all kubectl/ssh processes |
+| `cert`  |       | Manage certificates (add/list/remove) |
 | `help`  | `h`   | Show help |
 
-## Examples
+## 🔐 Certificate Management
 
-### Add a service
+Add P12 certificates for secure kubectl connections:
+
 ```bash
+# Add certificate (used for all kubectl services)
+pf cert add "/path/to/certificate.p12"
+
+# View configured certificate
+pf cert list
+
+# Remove certificate
+pf cert remove
+```
+
+**How it works:**
+- Extracts certificate and private key from P12 file
+- Stores them securely in `~/.pf/certs/`
+- Automatically injects `--client-certificate` and `--client-key` flags into kubectl commands
+- Password is only required during setup (not stored)
+
+## 💡 Usage Examples
+
+### Basic Service Management
+
+```bash
+# Add services
 pf add db "kubectl -n prod port-forward service/postgres 5432:5432"
 pf add redis "kubectl port-forward service/redis 6379:6379"
-```
+pf add api "kubectl port-forward deployment/api 8080:8080"
 
-### List services
-```bash
+# List all services
 pf list
+
+# Run single service
+pf run db
+
+# Run multiple services
+pf run db,redis,api
+
+# Delete a service
+pf delete redis
 ```
 
-### Run services
+### With Certificate
+
 ```bash
-pf run db             # Run single service
-pf run db,redis       # Run multiple services
+# 1. Add your P12 certificate
+pf cert add company-vpn.p12
+# Enter password when prompted
+
+# 2. Add kubectl service (certificate will be auto-used)
+pf add production "kubectl -n prod port-forward service/postgres 5432:5432"
+
+# 3. Run the service
+pf run production
 ```
 
-### Delete service
+### Cleanup Stuck Ports
+
 ```bash
-pf delete db
+# Kill all kubectl/ssh processes
+pf cleanup
 ```
 
-### Cleanup stuck ports
-```bash
-pf cleanup  # Kills all kubectl/ssh processes
-```
+## 🎮 TUI Controls
 
-
-## TUI Controls
+When running services:
 
 - **q** or **Ctrl+C** - Quit and stop all services
 - **r** - Manual refresh
 
-## Configuration
-
-Create a `config.json` file in the same directory as the executable:
-
-```json
-{
-  "health_check_interval": 2,
-  "health_check_timeout": 1,
-  "health_check_fail_count": 2,
-  "error_auto_clear_delay": 3,
-  "ui_refresh_rate": 100,
-  "log_max_size": 10,
-  "log_max_backups": 3
-}
-```
-
-### Configuration Options
-
-| Option | Description | Default |
-|--------|-------------|---------|
-| `health_check_interval` | How often to check health (seconds) | 2 |
-| `health_check_timeout` | Timeout for each check (seconds) | 1 |
-| `health_check_fail_count` | Failures before marking as ERROR | 2 |
-| `error_auto_clear_delay` | Delay before clearing errors (seconds) | 3 |
-| `ui_refresh_rate` | UI refresh rate (milliseconds) | 100 |
-| `log_max_size` | Max log file size (MB) | 10 |
-| `log_max_backups` | Number of log backups to keep | 3 |
-
-## Architecture
+## 📂 File Locations
 
 ```
-internal/
-├── app/           → Application coordinator
-├── config/        → Config & theme management
-├── logger/        → Rotating log system
-├── service/       → Service manager, runner, health checker
-├── storage/       → Persistence layer
-└── ui/            → Bubbletea TUI components
+~/.pf/
+├── certificate.json      → Certificate configuration
+└── certs/
+    ├── client-cert.pem   → Extracted certificate
+    └── client-key.pem    → Private key
 
-pkg/
-└── netutil/       → Network utilities
-
-themes/
-├── default.json   → Default cyan theme
-├── dark.json      → Dark purple theme
-└── light.json     → Light theme
+services.json             → Stored services (same directory as executable)
 ```
 
-## How It Works
+## 🏗️ Architecture
 
-1. **Port Conflict Handling**: Automatically detects and kills processes using target ports (3 retries)
-2. **Service Storage**: Services saved in `services.json` with backward compatibility
-3. **Health Checking**: TCP port checks every 2 seconds (configurable)
-4. **Auto-Reconnection**: Automatic retry on failure with 2-second delay
-5. **Staggered Starts**: 500ms delay between services to prevent kubectl config.lock conflicts
-6. **Process Management**: Proper cleanup of all processes on exit or Ctrl+C
-7. **Logging**: All events logged to `logs/pf.log` with rotation
+```
+.
+├── main.go          → CLI entry point and commands
+├── manager.go       → Service lifecycle management
+├── storage.go       → Service persistence
+├── ui.go            → Terminal UI (Bubbletea)
+└── cert/
+    ├── p12.go       → P12 certificate extraction
+    └── manager.go   → Certificate management
+```
 
-## Security & Antivirus Notice
+## 🔧 How It Works
 
+1. **Port Management**: Automatically detects and kills processes using target ports
+2. **Service Storage**: Services saved in `services.json`
+3. **Auto-Reconnection**: Automatically restarts failed connections
+4. **Certificate Injection**: For kubectl commands, automatically adds certificate flags
+5. **Process Cleanup**: Proper cleanup of all processes on exit
+
+## 🛡️ Security
+
+### Certificate Handling
+- P12 password is only used during extraction (never stored)
+- Certificate and key files stored with `0600` permissions (owner-only)
+- Files stored in user's home directory (`~/.pf/`)
+
+### Antivirus Notice
 This tool executes system commands (kubectl, ssh) and manages network connections, which may trigger antivirus false positives.
 
-**What we do:**
-- Execute port-forward commands you provide
-- Monitor and reconnect dropped connections
-- Save configurations locally
-
-**To resolve:**
+**Recommendations:**
 - Build from source to verify the code
-- Add exception in antivirus software
+- Add exception in antivirus software if needed
 - Code is open source - audit anytime
 
-## Troubleshooting
+## 🐛 Troubleshooting
 
 ### Port already in use
-Run `pf cleanup` or the tool auto-kills conflicting processes (3 retries with increasing delays).
+Run `pf cleanup` to kill all kubectl/ssh processes.
 
-### kubectl config.lock errors
-Fixed! Services start with 500ms delay to prevent lock conflicts.
+### Certificate not working
+- Verify the P12 file path is correct
+- Ensure you entered the correct password
+- Check certificate with: `pf cert list`
 
-### Connection detection too slow
-Adjust `health_check_interval` in config.json (minimum: 1 second).
+### Service won't start
+- Check the command manually: `kubectl port-forward ...`
+- Verify kubectl context and permissions
+- Check if certificate is required
 
-### Logs growing too large
-Configure `log_max_size` and `log_max_backups` in config.json.
-
-## Development
+## 💻 Development
 
 ### Requirements
 - Go 1.21+
-- Dependencies: bubbletea, lipgloss, lumberjack
+- Dependencies:
+  - `github.com/charmbracelet/bubbletea` - TUI framework
+  - `github.com/charmbracelet/lipgloss` - Styling
+  - `software.sslmate.com/src/go-pkcs12` - P12 handling
 
 ### Build
 ```bash
 go build -o pf
 ```
 
-### Test
+### Cross-Platform Build
 ```bash
-go test ./...
+# Windows
+GOOS=windows GOARCH=amd64 go build -o pf.exe
+
+# Linux
+GOOS=linux GOARCH=amd64 go build -o pf
+
+# macOS
+GOOS=darwin GOARCH=amd64 go build -o pf
 ```
+
+## 🤝 Contributing
+
+Contributions are welcome! Feel free to:
+- Report bugs
+- Suggest features
+- Submit pull requests
+
+## 📄 License
+
+Open source - feel free to use and modify.
 
 ---
 
-**Simple. Fast. Reliable.**
+**Simple. Secure. Reliable.**
