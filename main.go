@@ -11,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/alinemone/go-port-forward/cert"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -33,6 +34,8 @@ func main() {
 		handleDelete()
 	case "c", "cleanup", "-c", "-cleanup", "--c", "--cleanup":
 		handleCleanup()
+	case "cert":
+		handleCert()
 	case "h", "help", "--help", "-h":
 		printHelp()
 	default:
@@ -182,6 +185,107 @@ func handleCleanup() {
 	fmt.Println("Note: This kills ALL kubectl and ssh processes")
 }
 
+func handleCert() {
+	if len(os.Args) < 3 {
+		printCertHelp()
+		os.Exit(1)
+	}
+
+	subCmd := os.Args[2]
+
+	certMgr, err := cert.NewManager()
+	if err != nil {
+		fmt.Printf("Error: Failed to initialize certificate manager: %v\n", err)
+		os.Exit(1)
+	}
+
+	switch subCmd {
+	case "add":
+		handleCertAdd(certMgr)
+	case "list", "ls":
+		handleCertList(certMgr)
+	case "remove", "rm", "delete":
+		handleCertRemove(certMgr)
+	default:
+		fmt.Printf("Unknown cert command: %s\n", subCmd)
+		printCertHelp()
+		os.Exit(1)
+	}
+}
+
+func handleCertAdd(certMgr *cert.Manager) {
+	if len(os.Args) < 4 {
+		fmt.Println("Usage: pf cert add <p12-file>")
+		fmt.Println("Example: pf cert add company-vpn.p12")
+		os.Exit(1)
+	}
+
+	p12Path := os.Args[3]
+
+	// Check if P12 file exists
+	if _, err := os.Stat(p12Path); os.IsNotExist(err) {
+		fmt.Printf("Error: P12 file not found: %s\n", p12Path)
+		os.Exit(1)
+	}
+
+	// Ask for password
+	var password string
+	fmt.Print("🔐 P12 password (press Enter if none): ")
+	fmt.Scanln(&password)
+
+	// Add global certificate
+	if err := certMgr.AddCertificate(p12Path, password); err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println("✓ Certificate added successfully")
+	fmt.Println("  This certificate will be used for all kubectl services")
+}
+
+func handleCertList(certMgr *cert.Manager) {
+	config, exists := certMgr.GetCertificate()
+
+	if !exists {
+		fmt.Println("No certificate configured")
+		fmt.Println("Use 'pf cert add <p12-file>' to add a certificate")
+		return
+	}
+
+	fmt.Println("\n📜 Configured Certificate:")
+	fmt.Println()
+	fmt.Printf("  P12:  %s\n", config.P12Path)
+	fmt.Printf("  Cert: %s\n", config.CertPath)
+	fmt.Printf("  Key:  %s\n", config.KeyPath)
+	fmt.Println()
+}
+
+func handleCertRemove(certMgr *cert.Manager) {
+	if err := certMgr.RemoveCertificate(); err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println("✓ Certificate removed successfully")
+}
+
+func printCertHelp() {
+	help := `
+Certificate Management:
+  pf cert add <p12-file>      Add certificate for all services
+  pf cert list                Show configured certificate
+  pf cert remove              Remove certificate
+
+Examples:
+  pf cert add company-vpn.p12
+  pf cert list
+  pf cert remove
+
+Note: The certificate will be automatically used for all kubectl services.
+`
+	fmt.Println(help)
+}
+
 func printHelp() {
 	help := `
 Usage:
@@ -193,6 +297,7 @@ Commands:
   r, run <name1,name2,...>     Run services with TUI
   d, delete <name>             Delete service
   c, cleanup                   Kill all kubectl/ssh processes
+  cert <subcommand>            Manage certificate (add/list/remove)
   h, help                      Show this help
 
 Examples:
@@ -200,10 +305,17 @@ Examples:
   pf run db
   pf run db,redis
   pf delete db
+  pf cert add company-vpn.p12
+
+Certificate Management:
+  pf cert add <p12-file>      Add certificate (used for all kubectl services)
+  pf cert list                Show configured certificate
+  pf cert remove              Remove certificate
 
 Features:
   • Simple TUI with real-time status
   • Auto-reconnect on failure
+  • Certificate support (P12) for secure kubectl connections
   • Error display in terminal
   • Clean shutdown on quit
 `
