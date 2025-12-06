@@ -219,13 +219,27 @@ func renderCompactServicesTable(services []Service, selectedIndex int, width int
 		width = 60
 	}
 
+	// Calculate maximum service name length
+	maxNameLen := 7 // minimum for "SERVICE" header
+	for i := range services {
+		nameLen := len(services[i].Name)
+		if nameLen > maxNameLen {
+			maxNameLen = nameLen
+		}
+	}
+	// Cap at reasonable maximum to prevent table from being too wide
+	if maxNameLen > 30 {
+		maxNameLen = 30
+	}
+
 	var rows []string
 
-	// Compact header
+	// Compact header with dynamic width
+	headerName := fmt.Sprintf("%-*s", maxNameLen, "SERVICE")
 	header := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#FFFFFF")).
 		Bold(true).
-		Render("SERVICE       STATUS       UPTIME   RESTARTS")
+		Render(headerName + "  STATUS       UPTIME   RESTARTS")
 
 	rows = append(rows, header)
 
@@ -267,8 +281,12 @@ func renderCompactServicesTable(services []Service, selectedIndex int, width int
 
 		uptime := formatUptime(svc.StartTime)
 
-		// Build row parts
-		name := fmt.Sprintf("%-12s", svc.Name)
+		// Build row parts - truncate long service names with ellipsis if needed
+		displayName := svc.Name
+		if len(displayName) > maxNameLen {
+			displayName = displayName[:maxNameLen-3] + "..."
+		}
+		name := fmt.Sprintf("%-*s", maxNameLen, displayName)
 		status := fmt.Sprintf("%s %-10s", statusIcon, statusText)
 		uptimeStr := fmt.Sprintf("%-8s", uptime)
 		restarts := fmt.Sprintf("%d", svc.ReconnectCount)
@@ -292,7 +310,7 @@ func renderCompactServicesTable(services []Service, selectedIndex int, width int
 			Render(restarts)
 
 		// Combine
-		row := highlight + styledName + " " + styledStatus + " " + styledUptime + " " + styledRestarts
+		row := highlight + styledName + "  " + styledStatus + " " + styledUptime + " " + styledRestarts
 
 		rows = append(rows, row)
 	}
@@ -365,10 +383,10 @@ func renderCombinedLogsContent(services []Service) string {
 			log := allLogs[i]
 			timestamp := log.Entry.Time.Format("15:04:05")
 
-			// Service name (max 8 chars)
+			// Service name (max 12 chars with ellipsis)
 			serviceName := log.ServiceName
-			if len(serviceName) > 8 {
-				serviceName = serviceName[:8]
+			if len(serviceName) > 12 {
+				serviceName = serviceName[:9] + "..."
 			}
 
 			// Truncate very long messages to prevent layout breaking
@@ -391,7 +409,7 @@ func renderCombinedLogsContent(services []Service) string {
 			nameStyled := lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#4DD4FF")).
 				Bold(true).
-				Render(fmt.Sprintf("%-8s", serviceName))
+				Render(fmt.Sprintf("%-12s", serviceName))
 
 			timeStyled := lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#808080")).
