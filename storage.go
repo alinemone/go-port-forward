@@ -232,3 +232,54 @@ func (s *Storage) CheckNameConflict(name string) (hasConflict bool, err error) {
 
 	return isService && isGroup, nil
 }
+
+// PortConflict represents a port conflict between services
+type PortConflict struct {
+	Port     string
+	Services []string
+}
+
+// CheckPortConflicts checks for port conflicts among given service names
+func (s *Storage) CheckPortConflicts(serviceNames []string) ([]PortConflict, error) {
+	data, err := s.LoadData()
+	if err != nil {
+		return nil, err
+	}
+
+	// Map of port -> service names
+	portMap := make(map[string][]string)
+
+	for _, name := range serviceNames {
+		command, exists := data.Services[name]
+		if !exists {
+			continue
+		}
+
+		localPort, _ := ExtractPorts(command)
+		if localPort == "" {
+			continue
+		}
+
+		portMap[localPort] = append(portMap[localPort], name)
+	}
+
+	// Find conflicts (ports used by more than one service)
+	conflicts := make([]PortConflict, 0)
+	for port, services := range portMap {
+		if len(services) > 1 {
+			// Sort services for consistent display
+			sort.Strings(services)
+			conflicts = append(conflicts, PortConflict{
+				Port:     port,
+				Services: services,
+			})
+		}
+	}
+
+	// Sort conflicts by port number for consistent display
+	sort.Slice(conflicts, func(i, j int) bool {
+		return conflicts[i].Port < conflicts[j].Port
+	})
+
+	return conflicts, nil
+}

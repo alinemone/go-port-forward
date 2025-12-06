@@ -186,6 +186,27 @@ func handleRun() {
 		}
 	}
 
+	// Check for port conflicts
+	conflicts, err := storage.CheckPortConflicts(serviceNames)
+	if err != nil {
+		fmt.Printf("Error checking port conflicts: %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(conflicts) > 0 {
+		fmt.Println("\n⚠️  Port Conflicts Detected:")
+		fmt.Println()
+		for _, conflict := range conflicts {
+			fmt.Printf("  Port %s is used by:\n", conflict.Port)
+			for _, svc := range conflict.Services {
+				fmt.Printf("    • %s\n", svc)
+			}
+			fmt.Println()
+		}
+		fmt.Println("Please fix the port conflicts before running these services together.")
+		os.Exit(1)
+	}
+
 	// Start services
 	for _, name := range serviceNames {
 		if err := manager.Start(ctx, name); err != nil {
