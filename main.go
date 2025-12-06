@@ -34,6 +34,8 @@ func main() {
 		handleDelete()
 	case "c", "cleanup", "-c", "-cleanup", "--c", "--cleanup":
 		handleCleanup()
+	case "g", "group", "-g", "-group", "--g", "--group":
+		handleGroup()
 	case "cert":
 		handleCert()
 	case "h", "help", "--help", "-h":
@@ -100,16 +102,68 @@ func handleList() {
 func handleRun() {
 	if len(os.Args) < 3 {
 		fmt.Println("Usage: pf run <name1,name2,...>")
+		fmt.Println("       pf run all")
+		fmt.Println("       pf run <group-name>")
 		os.Exit(1)
 	}
 
-	serviceNames := strings.Split(os.Args[2], ",")
-	for i, name := range serviceNames {
-		serviceNames[i] = strings.TrimSpace(name)
+	storage := NewStorage()
+	input := os.Args[2]
+	var serviceNames []string
+
+	// Handle "all" keyword
+	if input == "all" {
+		names, err := storage.GetAllServiceNames()
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+			os.Exit(1)
+		}
+		if len(names) == 0 {
+			fmt.Println("No services found")
+			os.Exit(1)
+		}
+		serviceNames = names
+		fmt.Printf("Running all %d services...\n", len(serviceNames))
+	} else {
+		// Parse comma-separated list
+		serviceNames = strings.Split(input, ",")
+		for i, name := range serviceNames {
+			serviceNames[i] = strings.TrimSpace(name)
+		}
+
+		// If single name, check for conflicts and groups
+		if len(serviceNames) == 1 {
+			name := serviceNames[0]
+
+			// Check for conflicts first
+			hasConflict, err := storage.CheckNameConflict(name)
+			if err != nil {
+				fmt.Printf("Error: %v\n", err)
+				os.Exit(1)
+			}
+			if hasConflict {
+				fmt.Printf("Error: Name '%s' exists as both service and group\n", name)
+				fmt.Printf("Please rename either the service or the group to resolve the conflict\n")
+				os.Exit(1)
+			}
+
+			// Try as service first (priority)
+			if _, err := storage.Get(name); err == nil {
+				// It's a service, continue
+			} else {
+				// Try as group
+				if groupServices, err := storage.GetGroup(name); err == nil {
+					serviceNames = groupServices
+					fmt.Printf("Running group '%s' (%d services)...\n", name, len(serviceNames))
+				} else {
+					fmt.Printf("Error: Service or group '%s' not found\n", name)
+					os.Exit(1)
+				}
+			}
+		}
 	}
 
 	// Create manager
-	storage := NewStorage()
 	manager := NewManager(storage)
 
 	// Setup signal handling
@@ -124,7 +178,7 @@ func handleRun() {
 		cancel()
 	}()
 
-	// Validate and start services
+	// Validate all services exist
 	for _, name := range serviceNames {
 		if _, err := storage.Get(name); err != nil {
 			fmt.Printf("Error: Service '%s' not found\n", name)
@@ -183,6 +237,99 @@ func handleCleanup() {
 
 	fmt.Println("✓ Cleanup complete")
 	fmt.Println("Note: This kills ALL kubectl and ssh processes")
+}
+
+func handleGroup() {
+	if len(os.Args) < 3 {
+		printGroupHelp()
+		os.Exit(1)
+	}
+
+	subCmd := os.Args[2]
+	storage := NewStorage()
+
+	switch subCmd {
+	case "add", "a":
+		handleGroupAdd(storage)
+	case "list", "ls", "l":
+		handleGroupList(storage)
+	case "delete", "rm", "d":
+		handleGroupDelete(storage)
+	default:
+		fmt.Printf("Unknown group command: %s\n", subCmd)
+		printGroupHelp()
+		os.Exit(1)
+	}
+}
+
+func handleGroupAdd(storage *Storage) {
+	if len(os.Args) < 5 {
+		fmt.Println("Usage: pf group add <group-name> <service1,service2,...>")
+		fmt.Println("Example: pf group add database auth,core,crm")
+		os.Exit(1)
+	}
+
+	groupName := os.Args[3]
+	servicesStr := os.Args[4]
+
+	serviceNames := strings.Split(servicesStr, ",")
+	for i, name := range serviceNames {
+		serviceNames[i] = strings.TrimSpace(name)
+	}
+
+	if err := storage.AddGroup(groupName, serviceNames); err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("✓ Group '%s' created with %d services\n", groupName, len(serviceNames))
+}
+
+func handleGroupList(storage *Storage) {
+	groups, err := storage.ListGroups()
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(groups) == 0 {
+		fmt.Println("No groups found")
+		fmt.Println("Use 'pf group add <name> <services>' to create a group")
+		return
+	}
+
+	fmt.Println("\nGroups:")
+	fmt.Println()
+
+	// Sort group names
+	names := make([]string, 0, len(groups))
+	for name := range groups {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for i, name := range names {
+		services := groups[name]
+		fmt.Printf("  %d. %s (%d services)\n", i+1, name, len(services))
+		fmt.Printf("     → %s\n", strings.Join(services, ", "))
+	}
+	fmt.Println()
+}
+
+func handleGroupDelete(storage *Storage) {
+	if len(os.Args) < 4 {
+		fmt.Println("Usage: pf group delete <group-name>")
+		os.Exit(1)
+	}
+
+	groupName := os.Args[3]
+
+	if err := storage.DeleteGroup(groupName); err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("✓ Group '%s' deleted\n", groupName)
 }
 
 func handleCert() {
@@ -286,6 +433,25 @@ Note: The certificate will be automatically used for all kubectl services.
 	fmt.Println(help)
 }
 
+func printGroupHelp() {
+	help := `
+Group Management:
+  pf group add <name> <svc1,svc2,...>    Create a group
+  pf group list                          List all groups
+  pf group delete <name>                 Delete a group
+
+Examples:
+  pf group add database auth,core,crm
+  pf group add redis redis-dastyar,redisearch-dastyar
+  pf group list
+  pf group delete database
+  pf run database                        Run all services in group
+
+Note: Group names must not conflict with service names.
+`
+	fmt.Println(help)
+}
+
 func printHelp() {
 	help := `
 Usage:
@@ -295,7 +461,10 @@ Commands:
   a, add <name> <command>      Add new service
   l, list                      List all services
   r, run <name1,name2,...>     Run services with TUI
+  r, run all                   Run all services
+  r, run <group-name>          Run a group of services
   d, delete <name>             Delete service
+  g, group <subcommand>        Manage groups (add/list/delete)
   c, cleanup                   Kill all kubectl/ssh processes
   cert <subcommand>            Manage certificate (add/list/remove)
   h, help                      Show this help
@@ -304,8 +473,14 @@ Examples:
   pf add db "kubectl port-forward service/postgres 5432:5432"
   pf run db
   pf run db,redis
+  pf run all
   pf delete db
-  pf cert add company-vpn.p12
+
+Group Management:
+  pf group add database auth,core,crm
+  pf group list
+  pf group delete database
+  pf run database
 
 Certificate Management:
   pf cert add <p12-file>      Add certificate (used for all kubectl services)
@@ -316,6 +491,8 @@ Features:
   • Simple TUI with real-time status
   • Auto-reconnect on failure
   • Certificate support (P12) for secure kubectl connections
+  • Group services for easier management
+  • Run all services at once
   • Error display in terminal
   • Clean shutdown on quit
 `
