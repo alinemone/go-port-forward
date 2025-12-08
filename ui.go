@@ -16,15 +16,24 @@ type tickMsg time.Time
 
 // UI model
 type UI struct {
-	manager       *Manager
-	services      []Service
-	selectedIndex int
-	quitting      bool
-	width         int
-	height        int
-	viewport      viewport.Model
-	ready         bool
-	ctx           context.Context
+	manager              *Manager
+	services             []Service
+	selectedIndex        int
+	quitting             bool
+	width                int
+	height               int
+	viewport             viewport.Model
+	ready                bool
+	ctx                  context.Context
+	addingService        bool
+	availableServices    []string
+	selectedServiceIndex int
+	selectedServices     map[string]bool // For multi-select
+
+	// Performance optimizations
+	lastRenderHash string        // Cache for rendered content
+	tickInterval   time.Duration // Dynamic tick rate
+	lastActivity   time.Time     // Last activity timestamp
 }
 
 // NewUI creates a new UI
@@ -34,13 +43,15 @@ func NewUI(manager *Manager, ctx context.Context) *UI {
 		services:      []Service{},
 		selectedIndex: 0,
 		ctx:           ctx,
+		tickInterval:  500 * time.Millisecond, // Default tick rate
+		lastActivity:  time.Now(),
 	}
 }
 
 // Init initializes the UI
 func (u *UI) Init() tea.Cmd {
 	return tea.Batch(
-		tickCmd(),
+		tickCmd(u.tickInterval),
 		tea.EnterAltScreen,
 	)
 }
@@ -79,6 +90,51 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.KeyMsg:
+		// Handle service addition mode
+		if u.addingService {
+			switch msg.String() {
+			case "esc":
+				u.addingService = false
+				u.availableServices = nil
+				u.selectedServiceIndex = 0
+				u.selectedServices = nil
+			case "up", "k":
+				if u.selectedServiceIndex > 0 {
+					u.selectedServiceIndex--
+				}
+			case "down", "j":
+				if u.selectedServiceIndex < len(u.availableServices)-1 {
+					u.selectedServiceIndex++
+				}
+			case " ":
+				// Toggle selection for current item
+				if u.selectedServiceIndex < len(u.availableServices) {
+					serviceName := u.availableServices[u.selectedServiceIndex]
+					if serviceName != "(All services are already running)" {
+						if u.selectedServices == nil {
+							u.selectedServices = make(map[string]bool)
+						}
+						u.selectedServices[serviceName] = !u.selectedServices[serviceName]
+					}
+				}
+			case "enter":
+				// Add all selected services
+				if u.selectedServices != nil {
+					for serviceName, selected := range u.selectedServices {
+						if selected {
+							_ = u.manager.AddService(u.ctx, serviceName)
+						}
+					}
+				}
+				u.addingService = false
+				u.availableServices = nil
+				u.selectedServiceIndex = 0
+				u.selectedServices = nil
+			}
+			return u, cmd
+		}
+
+		// Normal mode handling
 		switch msg.String() {
 		case "q", "ctrl+c", "esc":
 			u.quitting = true
@@ -114,15 +170,35 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				u.manager.Stop(u.services[u.selectedIndex].Name)
 			}
 
+		case "a":
+			// Add new service
+			u.enterAddServiceMode()
+
 		default:
 			// Pass other keys to viewport
 			u.viewport, cmd = u.viewport.Update(msg)
 		}
 
 	case tickMsg:
-		u.services = u.manager.GetStates()
-		// Update viewport content
-		if u.ready {
+		// Update services
+		newServices := u.manager.GetStates()
+
+		// Check if there are any changes that require UI update
+		hasChanges := len(newServices) != len(u.services)
+		if !hasChanges {
+			for i, svc := range newServices {
+				if i >= len(u.services) || svc.Status != u.services[i].Status ||
+					svc.Error != u.services[i].Error || svc.ReconnectCount != u.services[i].ReconnectCount {
+					hasChanges = true
+					break
+				}
+			}
+		}
+
+		u.services = newServices
+
+		// Update viewport content only if there are changes
+		if u.ready && hasChanges {
 			// Recalculate viewport height based on current number of services
 			tableLines := 4 + len(u.services)
 			if len(u.services) == 0 {
@@ -135,14 +211,44 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			u.viewport.Height = viewportHeight
 
-			u.viewport.SetContent(renderCombinedLogsContent(u.services))
-			u.viewport.GotoBottom()
+			// Only update content if it actually changed
+			newContent := renderCombinedLogsContent(u.services)
+			if newContent != u.lastRenderHash {
+				u.viewport.SetContent(newContent)
+				u.lastRenderHash = newContent
+				u.viewport.GotoBottom()
+			}
+
+			// Update activity timestamp
+			u.lastActivity = time.Now()
 		}
+
 		// Adjust selected index if needed
 		if u.selectedIndex >= len(u.services) && len(u.services) > 0 {
 			u.selectedIndex = len(u.services) - 1
 		}
-		return u, tickCmd()
+
+		// Dynamic tick rate based on activity
+		newInterval := u.tickInterval
+		timeSinceActivity := time.Since(u.lastActivity)
+
+		// Slow down tick rate if no recent activity
+		if timeSinceActivity > 30*time.Second {
+			newInterval = 2000 * time.Millisecond // 2 seconds
+		} else if timeSinceActivity > 10*time.Second {
+			newInterval = 1000 * time.Millisecond // 1 second
+		} else if timeSinceActivity > 5*time.Second {
+			newInterval = 750 * time.Millisecond // 750ms
+		} else {
+			newInterval = 500 * time.Millisecond // 500ms default
+		}
+
+		// Update tick interval if changed
+		if newInterval != u.tickInterval {
+			u.tickInterval = newInterval
+		}
+
+		return u, tickCmd(u.tickInterval)
 	}
 
 	return u, cmd
@@ -156,6 +262,11 @@ func (u *UI) View() string {
 
 	if !u.ready {
 		return "Initializing..."
+	}
+
+	// If in add service mode, show service selection overlay
+	if u.addingService {
+		return u.renderAddServiceOverlay()
 	}
 
 	// Ensure viewport has correct dimensions before rendering
@@ -429,6 +540,45 @@ func renderCombinedLogsContent(services []Service) string {
 	return content.String()
 }
 
+// renderAddServiceOverlay renders the service selection overlay
+func (u *UI) renderAddServiceOverlay() string {
+	// Simple overlay with multi-select indicators
+	var content []string
+
+	// Header
+	content = append(content, "╭─ SELECT SERVICES TO ADD ─────────────────────╮")
+	content = append(content, "│                                              │")
+
+	// Service list with multi-select indicators
+	for i, serviceName := range u.availableServices {
+		var prefix string
+		if i == u.selectedServiceIndex {
+			prefix = "❯ "
+		} else {
+			prefix = "  "
+		}
+
+		// Check if this service is selected
+		var checkbox string
+		if u.selectedServices != nil && u.selectedServices[serviceName] {
+			checkbox = "✓"
+		} else {
+			checkbox = " "
+		}
+
+		line := fmt.Sprintf("│ %s[%s] %s%s │", prefix, checkbox, serviceName, strings.Repeat(" ", 37-len(serviceName)))
+		content = append(content, line)
+	}
+
+	content = append(content, "│                                              │")
+
+	// Instructions
+	content = append(content, "│ ↑↓:navigate • Space:select • Enter:add • Esc:cancel │")
+	content = append(content, "╰──────────────────────────────────────────────╯")
+
+	return strings.Join(content, "\n")
+}
+
 // renderCompactHelp renders compact help at bottom
 func renderCompactHelp(width int) string {
 	// Ensure minimum width
@@ -438,7 +588,7 @@ func renderCompactHelp(width int) string {
 
 	help := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#808080")).
-		Render("↑↓:navigate/scroll • r:restart • s:stop • q:quit")
+		Render("↑↓:navigate/scroll • r:restart • s:stop • a:add • q:quit")
 
 	style := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -465,8 +615,46 @@ func renderShutdown() string {
 }
 
 // tickCmd returns a tick command
-func tickCmd() tea.Cmd {
-	return tea.Tick(500*time.Millisecond, func(t time.Time) tea.Msg {
+// enterAddServiceMode enters the service addition mode
+func (u *UI) enterAddServiceMode() {
+	// Get all available services from storage
+	storage := NewStorage()
+	allServices, err := storage.GetAllServiceNames()
+	if err != nil {
+		return // Silently fail if we can't load services
+	}
+
+	// Get currently running services
+	runningServices := u.manager.GetStates()
+	runningMap := make(map[string]bool)
+	for _, svc := range runningServices {
+		runningMap[svc.Name] = true
+	}
+
+	// Filter out already running services
+	available := make([]string, 0)
+	for _, serviceName := range allServices {
+		if !runningMap[serviceName] {
+			available = append(available, serviceName)
+		}
+	}
+
+	// Always enter add mode if we have services at all
+	if len(allServices) > 0 {
+		u.addingService = true
+		if len(available) == 0 {
+			// Show a message if all services are running
+			u.availableServices = []string{"(All services are already running)"}
+		} else {
+			u.availableServices = available
+		}
+		u.selectedServiceIndex = 0
+		u.selectedServices = make(map[string]bool) // Initialize for multi-select
+	}
+}
+
+func tickCmd(interval time.Duration) tea.Cmd {
+	return tea.Tick(interval, func(t time.Time) tea.Msg {
 		return tickMsg(t)
 	})
 }

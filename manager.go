@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"os"
 	"os/exec"
 	"regexp"
@@ -14,6 +15,75 @@ import (
 
 	"github.com/alinemone/go-port-forward/cert"
 )
+
+// Buffer pool for memory efficiency
+var bufferPool = sync.Pool{
+	New: func() interface{} {
+		return make([]byte, 8192) // 8KB buffer pool
+	},
+}
+
+// Security validation functions
+
+// validateServiceName validates service name for security
+func validateServiceName(name string) error {
+	if name == "" {
+		return fmt.Errorf("service name cannot be empty")
+	}
+
+	if len(name) > 50 {
+		return fmt.Errorf("service name too long (max 50 characters)")
+	}
+
+	// Check for dangerous characters
+	dangerousChars := []string{"..", "/", "\\", ":", "*", "?", "\"", "<", ">", "|"}
+	for _, char := range dangerousChars {
+		if strings.Contains(name, char) {
+			return fmt.Errorf("service name contains invalid character: %s", char)
+		}
+	}
+
+	// Only allow alphanumeric, hyphens, and underscores
+	matched, _ := regexp.MatchString(`^[a-zA-Z0-9_-]+$`, name)
+	if !matched {
+		return fmt.Errorf("service name can only contain letters, numbers, hyphens, and underscores")
+	}
+
+	return nil
+}
+
+// validateCommand validates command for security
+func validateCommand(command string) error {
+	if command == "" {
+		return fmt.Errorf("command cannot be empty")
+	}
+
+	if len(command) > 1000 {
+		return fmt.Errorf("command too long (max 1000 characters)")
+	}
+
+	// Basic command validation - prevent obvious command injection attempts
+	dangerousPatterns := []string{
+		`rm\s+-rf`,
+		`dd\s+if=`,
+		`mkfs`,
+		`format`,
+		`del\s+/f`,
+		`shutdown`,
+		`reboot`,
+		`halt`,
+		`poweroff`,
+	}
+
+	for _, pattern := range dangerousPatterns {
+		matched, _ := regexp.MatchString(pattern, strings.ToLower(command))
+		if matched {
+			return fmt.Errorf("command contains potentially dangerous operation: %s", pattern)
+		}
+	}
+
+	return nil
+}
 
 // Service status
 const (
@@ -149,10 +219,20 @@ func NewManager(storage *Storage) *Manager {
 
 // Start starts a service
 func (m *Manager) Start(ctx context.Context, name string) error {
+	// Validate service name
+	if err := validateServiceName(name); err != nil {
+		return fmt.Errorf("invalid service name: %v", err)
+	}
+
 	// Load service command
 	command, err := m.storage.Get(name)
 	if err != nil {
 		return err
+	}
+
+	// Validate command for security
+	if err := validateCommand(command); err != nil {
+		return fmt.Errorf("invalid command for service '%s': %v", name, err)
 	}
 
 	// Extract ports
@@ -162,7 +242,10 @@ func (m *Manager) Start(ctx context.Context, name string) error {
 	}
 
 	// Cleanup port if in use
-	_ = killProcessUsingPort(localPort)
+	if err := killProcessUsingPort(localPort); err != nil {
+		// Log warning but don't fail startup
+		fmt.Printf("Warning: Failed to clean up port %s: %v\n", localPort, err)
+	}
 	time.Sleep(300 * time.Millisecond)
 
 	// Create service
@@ -193,6 +276,10 @@ func (m *Manager) Start(ctx context.Context, name string) error {
 
 // runService runs a service with auto-reconnect
 func (m *Manager) runService(ctx context.Context, svc *Service) {
+	const maxReconnects = 10
+	const baseBackoff = 2 * time.Second
+	const maxBackoff = 30 * time.Second
+
 	isFirstRun := true
 
 	for {
@@ -204,21 +291,42 @@ func (m *Manager) runService(ctx context.Context, svc *Service) {
 			if !isFirstRun {
 				svc.mu.Lock()
 				svc.ReconnectCount++
+				reconnectCount := svc.ReconnectCount
 				svc.mu.Unlock()
 
+				// Check if we've exceeded max reconnect attempts
+				if reconnectCount >= maxReconnects {
+					svc.mu.Lock()
+					svc.Status = StatusError
+					svc.Error = fmt.Sprintf("Max reconnect attempts (%d) exceeded", maxReconnects)
+					svc.mu.Unlock()
+					svc.addLog("MAXIMUM RECONNECT ATTEMPTS REACHED - GIVING UP", true)
+					return
+				}
+
+				// Calculate exponential backoff with jitter
+				backoff := baseBackoff * time.Duration(1<<uint(reconnectCount-1))
+				if backoff > maxBackoff {
+					backoff = maxBackoff
+				}
+
+				// Add jitter to prevent thundering herd
+				jitter := time.Duration(float64(backoff) * 0.1 * (rand.Float64()*2 - 1))
+				backoff += jitter
+
 				// Add reconnect log for transparency
-				svc.addLog(fmt.Sprintf("━━━━ RECONNECTING (attempt #%d) ━━━━", svc.ReconnectCount), false)
+				svc.addLog(fmt.Sprintf("━━━━ RECONNECTING (attempt #%d) in %.1fs ━━━━", reconnectCount, backoff.Seconds()), false)
+
+				// Wait for backoff duration or context cancellation
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(backoff):
+				}
 			}
 			isFirstRun = false
 
 			m.runOnce(ctx, svc)
-
-			// Wait 2 seconds before reconnecting
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(2 * time.Second):
-			}
 		}
 	}
 }
@@ -250,8 +358,27 @@ func (m *Manager) runOnce(ctx context.Context, svc *Service) {
 	}
 
 	// Capture output
-	stdoutPipe, _ := cmd.StdoutPipe()
-	stderrPipe, _ := cmd.StderrPipe()
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		errorMsg := fmt.Sprintf("Failed to create stdout pipe: %v", err)
+		svc.mu.Lock()
+		svc.Status = StatusError
+		svc.Error = errorMsg
+		svc.mu.Unlock()
+		svc.addLog(errorMsg, true)
+		return
+	}
+
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		errorMsg := fmt.Sprintf("Failed to create stderr pipe: %v", err)
+		svc.mu.Lock()
+		svc.Status = StatusError
+		svc.Error = errorMsg
+		svc.mu.Unlock()
+		svc.addLog(errorMsg, true)
+		return
+	}
 
 	// Start process
 	if err := cmd.Start(); err != nil {
@@ -266,7 +393,7 @@ func (m *Manager) runOnce(ctx context.Context, svc *Service) {
 	go m.monitorOutput(svc, stderrPipe, nil, true)         // stderr
 
 	// Wait for process to exit
-	err := cmd.Wait()
+	err = cmd.Wait()
 	if err != nil && ctx.Err() == nil {
 		errorMsg := fmt.Sprintf("Process died: %v", err)
 		svc.addError(errorMsg)
@@ -300,7 +427,10 @@ func (m *Manager) monitorOutput(svc *Service, pipe interface{}, _ interface{}, i
 		return
 	}
 
-	buf := make([]byte, 8192)
+	// Get buffer from pool
+	buf := bufferPool.Get().([]byte)
+	defer bufferPool.Put(buf)
+
 	reader := pipe.(interface{ Read([]byte) (int, error) })
 
 	for {
@@ -386,7 +516,10 @@ func (m *Manager) Stop(name string) {
 
 	// Cleanup port
 	time.Sleep(300 * time.Millisecond)
-	_ = killProcessUsingPort(svc.LocalPort)
+	if err := killProcessUsingPort(svc.LocalPort); err != nil {
+		// Log warning but don't fail restart
+		fmt.Printf("Warning: Failed to clean up port %s during restart: %v\n", svc.LocalPort, err)
+	}
 }
 
 // Restart restarts a service
@@ -398,6 +531,27 @@ func (m *Manager) Restart(ctx context.Context, name string) error {
 	time.Sleep(500 * time.Millisecond)
 
 	// Start again
+	return m.Start(ctx, name)
+}
+
+// AddService adds a new service dynamically
+func (m *Manager) AddService(ctx context.Context, name string) error {
+	// Check if service already exists
+	m.mu.RLock()
+	_, exists := m.services[name]
+	m.mu.RUnlock()
+
+	if exists {
+		return fmt.Errorf("service '%s' is already running", name)
+	}
+
+	// Load service configuration from storage
+	_, err := m.storage.Get(name)
+	if err != nil {
+		return fmt.Errorf("service '%s' not found in storage", name)
+	}
+
+	// Start the service
 	return m.Start(ctx, name)
 }
 
@@ -417,7 +571,9 @@ func (m *Manager) StopAll() {
 	// Cleanup ports
 	time.Sleep(300 * time.Millisecond)
 	for _, svc := range services {
-		_ = killProcessUsingPort(svc.LocalPort)
+		if err := killProcessUsingPort(svc.LocalPort); err != nil {
+			fmt.Printf("Warning: Failed to clean up port %s during cleanup: %v\n", svc.LocalPort, err)
+		}
 	}
 }
 
