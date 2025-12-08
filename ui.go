@@ -89,6 +89,9 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			u.viewport.Height = viewportHeight
 		}
 
+		// Reset render cache on resize to force recalculation
+		u.lastRenderHash = ""
+
 	case tea.KeyMsg:
 		// Handle service addition mode
 		if u.addingService {
@@ -186,7 +189,8 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Check if there are any changes that require UI update
 		hasChanges := len(newServices) != len(u.services)
 		if !hasChanges {
-			for i, svc := range newServices {
+			for i := range newServices {
+				svc := &newServices[i]
 				if i >= len(u.services) || svc.Status != u.services[i].Status ||
 					svc.Error != u.services[i].Error || svc.ReconnectCount != u.services[i].ReconnectCount {
 					hasChanges = true
@@ -264,9 +268,21 @@ func (u *UI) View() string {
 		return "Initializing..."
 	}
 
-	// If in add service mode, show service selection overlay
+	// If in add service mode, show overlay from top
 	if u.addingService {
-		return u.renderAddServiceOverlay()
+		overlayContent := u.renderAddServiceOverlay()
+
+		// Render overlay at top without centering
+		var sections []string
+		sections = append(sections, overlayContent)
+
+		// Fill remaining space (overlay is now taller with instructions below)
+		remainingSpace := u.height - 15 // Estimate overlay height + instructions
+		for i := 0; i < remainingSpace && i > 0; i++ {
+			sections = append(sections, strings.Repeat(" ", u.width))
+		}
+
+		return lipgloss.JoinVertical(lipgloss.Left, sections...)
 	}
 
 	// Ensure viewport has correct dimensions before rendering
@@ -542,41 +558,116 @@ func renderCombinedLogsContent(services []Service) string {
 
 // renderAddServiceOverlay renders the service selection overlay
 func (u *UI) renderAddServiceOverlay() string {
-	// Simple overlay with multi-select indicators
-	var content []string
-
-	// Header
-	content = append(content, "╭─ SELECT SERVICES TO ADD ─────────────────────╮")
-	content = append(content, "│                                              │")
-
-	// Service list with multi-select indicators
-	for i, serviceName := range u.availableServices {
-		var prefix string
-		if i == u.selectedServiceIndex {
-			prefix = "❯ "
-		} else {
-			prefix = "  "
-		}
-
-		// Check if this service is selected
-		var checkbox string
-		if u.selectedServices != nil && u.selectedServices[serviceName] {
-			checkbox = "✓"
-		} else {
-			checkbox = " "
-		}
-
-		line := fmt.Sprintf("│ %s[%s] %s%s │", prefix, checkbox, serviceName, strings.Repeat(" ", 37-len(serviceName)))
-		content = append(content, line)
+	// Use exact same width as main UI
+	width := u.width
+	if width <= 0 {
+		width = 120 // fallback
 	}
 
-	content = append(content, "│                                              │")
+	// Ensure minimum width (same as main UI)
+	if width < 60 {
+		width = 60
+	}
 
-	// Instructions
-	content = append(content, "│ ↑↓:navigate • Space:select • Enter:add • Esc:cancel │")
-	content = append(content, "╰──────────────────────────────────────────────╯")
+	// Calculate maximum service name length (exact same as main UI)
+	maxNameLen := 7 // minimum for "SERVICE" header
+	for _, serviceName := range u.availableServices {
+		nameLen := len(serviceName)
+		if nameLen > maxNameLen {
+			maxNameLen = nameLen
+		}
+	}
+	// Cap at reasonable maximum to prevent table from being too wide (same as main UI)
+	if maxNameLen > 30 {
+		maxNameLen = 30
+	}
 
-	return strings.Join(content, "\n")
+	var rows []string
+
+	// Compact header with dynamic width (exact copy from main UI)
+	headerName := fmt.Sprintf("%-*s", maxNameLen, "SERVICE")
+	header := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#FFFFFF")).
+		Bold(true).
+		Render(headerName + "  SELECT")
+
+	rows = append(rows, header)
+
+	// Separator matches available width (exact copy from main UI)
+	sepWidth := width - 6 // subtract border (2) and padding (4)
+	if sepWidth < 50 {
+		sepWidth = 50
+	}
+	if sepWidth > 200 {
+		sepWidth = 200 // Maximum separator width
+	}
+	rows = append(rows, strings.Repeat("─", sepWidth))
+
+	// Service rows with exact same styling as main UI
+	for i, serviceName := range u.availableServices {
+		// Highlight logic (same as main UI)
+		highlight := "  "
+		if i == u.selectedServiceIndex {
+			highlight = "► "
+		}
+
+		// Checkbox status
+		isSelected := false
+		if u.selectedServices != nil && u.selectedServices[serviceName] {
+			isSelected = true
+		}
+
+		// Checkbox display
+		var checkbox string
+		if isSelected {
+			checkbox = "[✓]"
+		} else {
+			checkbox = "[ ]"
+		}
+
+		// Build row parts (exact same as main UI)
+		displayName := serviceName
+		if len(displayName) > maxNameLen {
+			displayName = displayName[:maxNameLen-3] + "..."
+		}
+		name := fmt.Sprintf("%-*s", maxNameLen, displayName)
+		selectStr := fmt.Sprintf("%-7s", checkbox) // Fixed width for select column
+
+		// Style each part (exact same as main UI)
+		styledName := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#E0E0E0")).
+			Bold(true).
+			Render(name)
+
+		styledSelect := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#C0C0C0")).
+			Render(selectStr)
+
+		// Combine (exact same as main UI)
+		row := highlight + styledName + "  " + styledSelect
+
+		rows = append(rows, row)
+	}
+
+	table := lipgloss.JoinVertical(lipgloss.Left, rows...)
+
+	// Apply border with matching width (exact same as main UI)
+	style := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#4A90E2")).
+		Padding(0, 1).
+		Width(width - 2)
+
+	overlayBox := style.Render(table)
+
+	// Add instructions below the main box
+	instructions := "↑↓:navigate • Space:toggle selection • Enter:add selected • Esc:cancel"
+	instructionStyled := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#808080")).
+		Render(instructions)
+
+	// Combine box and instructions with spacing
+	return lipgloss.JoinVertical(lipgloss.Left, overlayBox, instructionStyled)
 }
 
 // renderCompactHelp renders compact help at bottom
@@ -627,8 +718,8 @@ func (u *UI) enterAddServiceMode() {
 	// Get currently running services
 	runningServices := u.manager.GetStates()
 	runningMap := make(map[string]bool)
-	for _, svc := range runningServices {
-		runningMap[svc.Name] = true
+	for i := range runningServices {
+		runningMap[runningServices[i].Name] = true
 	}
 
 	// Filter out already running services
