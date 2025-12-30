@@ -16,6 +16,71 @@ Modern CLI tool for managing multiple port-forward connections with real-time mo
 
 ## 📥 Installation
 
+### From Releases (Recommended)
+
+#### 🪟 Windows
+
+1. Download `pf-windows-amd64.exe` from [Releases](https://github.com/alinemone/go-port-forward/releases)
+2. Rename to `pf.exe`:
+   - **Right-click** the file → **Rename** → Change name to `pf.exe`
+   - Or in **Command Prompt/PowerShell**:
+     ```cmd
+     ren pf-windows-amd64.exe pf.exe
+     ```
+3. Move `pf.exe` to a folder in your PATH
+4. Run from anywhere:
+   ```cmd
+   pf.exe
+   ```
+
+#### 🐧 Linux (Intel/AMD)
+
+1. Download `pf-linux-amd64` from [Releases](https://github.com/alinemone/go-port-forward/releases)
+2. Rename and install in one command:
+   ```bash
+   mv pf-linux-amd64 pf && chmod +x pf && sudo mv pf /usr/local/bin/
+   ```
+3. Run from anywhere:
+   ```bash
+   pf
+   ```
+
+#### 🐧 Linux (ARM/ARM64)
+
+1. Download `pf-linux-arm64` from [Releases](https://github.com/alinemone/go-port-forward/releases)
+2. Rename and install in one command:
+   ```bash
+   mv pf-linux-arm64 pf && chmod +x pf && sudo mv pf /usr/local/bin/
+   ```
+3. Run from anywhere:
+   ```bash
+   pf
+   ```
+
+#### 🍎 macOS (Intel)
+
+1. Download `pf-darwin-amd64` from [Releases](https://github.com/alinemone/go-port-forward/releases)
+2. Rename and install in one command:
+   ```bash
+   mv pf-darwin-amd64 pf && chmod +x pf && sudo mv pf /usr/local/bin/
+   ```
+3. Run from anywhere:
+   ```bash
+   pf
+   ```
+
+#### 🍎 macOS (Apple Silicon M1/M2/M3)
+
+1. Download `pf-darwin-arm64` from [Releases](https://github.com/alinemone/go-port-forward/releases)
+2. Rename and install in one command:
+   ```bash
+   mv pf-darwin-arm64 pf && chmod +x pf && sudo mv pf /usr/local/bin/
+   ```
+3. Run from anywhere:
+   ```bash
+   pf
+   ```
+
 ### From Source
 
 #### Windows
@@ -30,10 +95,6 @@ go build -o pf
 sudo mv pf /usr/local/bin/
 sudo chmod +x /usr/local/bin/pf
 ```
-
-### From Releases
-
-Download pre-built binaries from [Releases](https://github.com/alinemone/go-port-forward/releases).
 
 ## 🚀 Quick Start
 
