@@ -515,11 +515,16 @@ func renderCombinedLogsContent(services []Service, maxWidth int) string {
 			log := allLogs[i]
 			timestamp := log.Entry.Time.Format("15:04:05")
 
-			// Service name (max 12 chars with ellipsis)
-			serviceName := log.ServiceName
-			if len(serviceName) > 12 {
-				serviceName = serviceName[:9] + "..."
+			// Service name adapts to available width
+			nameWidth := maxWidth / 4
+			if nameWidth < 8 {
+				nameWidth = 8
 			}
+			if nameWidth > 24 {
+				nameWidth = 24
+			}
+			serviceName := truncateRunesWithEllipsis(log.ServiceName, nameWidth)
+			namePlain := padRightRunes(serviceName, nameWidth)
 
 			// Message style based on error or info
 			var msgColor lipgloss.Color
@@ -533,9 +538,8 @@ func renderCombinedLogsContent(services []Service, maxWidth int) string {
 			}
 
 			// Calculate prefix width: [serviceName timestamp]
-			// serviceName is always 12 chars, timestamp is 8 chars, brackets and spaces = 5
-			// Total prefix = 1 + 12 + 1 + 8 + 2 = 24 chars
-			prefixWidth := 24
+			// Total prefix = "[" + name + " " + timestamp + "] " => nameWidth + 12
+			prefixWidth := nameWidth + 12
 
 			// Calculate available width for message
 			availableWidth := maxWidth - prefixWidth
@@ -550,7 +554,7 @@ func renderCombinedLogsContent(services []Service, maxWidth int) string {
 			nameStyled := lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#4DD4FF")).
 				Bold(true).
-				Render(fmt.Sprintf("%-12s", serviceName))
+				Render(namePlain)
 
 			timeStyled := lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#808080")).
@@ -656,6 +660,28 @@ func wrapText(text string, maxWidth int) []string {
 	}
 
 	return lines
+}
+
+func truncateRunesWithEllipsis(text string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	runes := []rune(text)
+	if len(runes) <= max {
+		return text
+	}
+	if max <= 3 {
+		return string(runes[:max])
+	}
+	return string(runes[:max-3]) + "..."
+}
+
+func padRightRunes(text string, width int) string {
+	runes := []rune(text)
+	if len(runes) >= width {
+		return text
+	}
+	return text + strings.Repeat(" ", width-len(runes))
 }
 
 // renderAddServiceOverlay renders the service selection overlay
