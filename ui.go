@@ -65,9 +65,16 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		u.width = msg.Width
 		u.height = msg.Height
 
-		// Calculate dynamic viewport height based on rendered sections
-		servicesHeight, helpHeight := u.computeSectionHeights()
-		overhead := servicesHeight + helpHeight + 2 // log box border
+		// Calculate dynamic viewport height
+		// Table: 4 (border + header + separator + bottom border) + number of services
+		// Log box border: 2 (top + bottom)
+		// Help: 3 (border + text)
+		// Total overhead: 9 + number of services
+		tableLines := 4 + len(u.services)
+		if len(u.services) == 0 {
+			tableLines = 1 // Just "No services running..."
+		}
+		overhead := tableLines + 2 + 3 // table + log border + help
 		viewportHeight := msg.Height - overhead
 		if viewportHeight < 3 {
 			viewportHeight = 3 // Minimum height
@@ -185,8 +192,7 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			for i := range newServices {
 				svc := &newServices[i]
 				if i >= len(u.services) || svc.Status != u.services[i].Status ||
-					svc.Error != u.services[i].Error || svc.ReconnectCount != u.services[i].ReconnectCount ||
-					serviceLogsChanged(svc, &u.services[i]) {
+					svc.Error != u.services[i].Error || svc.ReconnectCount != u.services[i].ReconnectCount {
 					hasChanges = true
 					break
 				}
@@ -197,9 +203,12 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Update viewport content only if there are changes
 		if u.ready && hasChanges {
-			// Recalculate viewport height based on rendered sections
-			servicesHeight, helpHeight := u.computeSectionHeights()
-			overhead := servicesHeight + helpHeight + 2 // log box border
+			// Recalculate viewport height based on current number of services
+			tableLines := 4 + len(u.services)
+			if len(u.services) == 0 {
+				tableLines = 1
+			}
+			overhead := tableLines + 2 + 3 // table + log border + help
 			viewportHeight := u.height - overhead
 			if viewportHeight < 3 {
 				viewportHeight = 3
@@ -209,8 +218,8 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Only update content if it actually changed
 			// Pass viewport width for proper wrapping (subtract border width)
 			contentWidth := u.viewport.Width - 4 // Account for border and padding
-			if contentWidth < 10 {
-				contentWidth = 10 // Minimum width
+			if contentWidth < 40 {
+				contentWidth = 40 // Minimum width
 			}
 			newContent := renderCombinedLogsContent(u.services, contentWidth)
 			if newContent != u.lastRenderHash {
@@ -269,13 +278,25 @@ func (u *UI) View() string {
 		overlayContent := u.renderAddServiceOverlay()
 
 		// Render overlay at top without centering
-		return overlayContent
+		var sections []string
+		sections = append(sections, overlayContent)
+
+		// Fill remaining space (overlay is now taller with instructions below)
+		remainingSpace := u.height - 15 // Estimate overlay height + instructions
+		for i := 0; i < remainingSpace && i > 0; i++ {
+			sections = append(sections, strings.Repeat(" ", u.width))
+		}
+
+		return lipgloss.JoinVertical(lipgloss.Left, sections...)
 	}
 
 	// Ensure viewport has correct dimensions before rendering
 	if u.width > 0 && u.height > 0 {
-		servicesHeight, helpHeight := u.computeSectionHeights()
-		overhead := servicesHeight + helpHeight + 2
+		tableLines := 4 + len(u.services)
+		if len(u.services) == 0 {
+			tableLines = 1
+		}
+		overhead := tableLines + 2 + 3
 		viewportHeight := u.height - overhead
 		if viewportHeight < 3 {
 			viewportHeight = 3
@@ -290,17 +311,17 @@ func (u *UI) View() string {
 
 	var sections []string
 
-	// Services Table (responsive)
+	// Services Table (compact)
 	if len(u.services) == 0 {
 		sections = append(sections, renderEmpty())
 	} else {
-		sections = append(sections, renderServicesSection(u.services, u.selectedIndex, u.width))
+		sections = append(sections, renderCompactServicesTable(u.services, u.selectedIndex, u.width))
 	}
 
 	// Scrollable logs with border (full width)
 	logBoxWidth := u.width - 2
-	if logBoxWidth < 0 {
-		logBoxWidth = 0
+	if logBoxWidth < 58 {
+		logBoxWidth = 58 // Minimum width
 	}
 	logBox := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -323,19 +344,11 @@ func renderEmpty() string {
 	return emptyStyle.Render("⚬ No services running...")
 }
 
-// renderServicesSection renders a responsive services section
-func renderServicesSection(services []Service, selectedIndex int, width int) string {
-	if width <= 0 {
-		width = 80
-	}
-
-	return renderCompactServicesTable(services, selectedIndex, width)
-}
-
 // renderCompactServicesTable renders a compact services table
 func renderCompactServicesTable(services []Service, selectedIndex int, width int) string {
-	if width <= 0 {
-		width = 80
+	// Ensure minimum width
+	if width < 60 {
+		width = 60
 	}
 
 	// Calculate maximum service name length
@@ -353,61 +366,19 @@ func renderCompactServicesTable(services []Service, selectedIndex int, width int
 
 	var rows []string
 
-	// Decide which columns to show based on width
-	showUptime := width >= 72
-	showRestarts := width >= 88
-
-	// Column widths
-	statusWidth := 12
-	statusLabel := "STATUS"
-	shortStatus := width < 40
-	if shortStatus {
-		statusWidth = 3
-		statusLabel = "ST"
-	}
-	uptimeWidth := 8
-	restartsWidth := 8
-	baseWidth := 2 + 2 + statusWidth // highlight + spacing + status
-	if showUptime {
-		baseWidth += 2 + uptimeWidth
-	}
-	if showRestarts {
-		baseWidth += 2 + restartsWidth
-	}
-
-	// Adjust name width to fit available space
-	maxNameAvailable := width - baseWidth - 4
-	if maxNameAvailable < 3 {
-		maxNameAvailable = 3
-	}
-	if maxNameLen > maxNameAvailable {
-		maxNameLen = maxNameAvailable
-	}
-
 	// Compact header with dynamic width
-	headerTitle := "SERVICE"
-	if maxNameLen < len(headerTitle) {
-		headerTitle = "SVC"
-	}
-	headerName := fmt.Sprintf("%-*s", maxNameLen, headerTitle)
-	headerParts := []string{headerName, statusLabel}
-	if showUptime {
-		headerParts = append(headerParts, "UPTIME")
-	}
-	if showRestarts {
-		headerParts = append(headerParts, "RESTARTS")
-	}
+	headerName := fmt.Sprintf("%-*s", maxNameLen, "SERVICE")
 	header := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#FFFFFF")).
 		Bold(true).
-		Render(strings.Join(headerParts, "  "))
+		Render(headerName + "  STATUS       UPTIME   RESTARTS")
 
 	rows = append(rows, header)
 
 	// Separator matches available width (accounting for border and padding)
 	sepWidth := width - 6 // subtract border (2) and padding (4)
-	if sepWidth < 1 {
-		sepWidth = 1
+	if sepWidth < 50 {
+		sepWidth = 50
 	}
 	if sepWidth > 200 {
 		sepWidth = 200 // Maximum separator width
@@ -448,13 +419,7 @@ func renderCompactServicesTable(services []Service, selectedIndex int, width int
 			displayName = displayName[:maxNameLen-3] + "..."
 		}
 		name := fmt.Sprintf("%-*s", maxNameLen, displayName)
-		if shortStatus {
-			statusText = statusText[:1]
-		}
-		status := fmt.Sprintf("%s %-2s", statusIcon, statusText)
-		if !shortStatus {
-			status = fmt.Sprintf("%s %-10s", statusIcon, statusText)
-		}
+		status := fmt.Sprintf("%s %-10s", statusIcon, statusText)
 		uptimeStr := fmt.Sprintf("%-8s", uptime)
 		restarts := fmt.Sprintf("%d", svc.ReconnectCount)
 
@@ -476,14 +441,8 @@ func renderCompactServicesTable(services []Service, selectedIndex int, width int
 			Foreground(lipgloss.Color("#C0C0C0")).
 			Render(restarts)
 
-		// Combine, respecting responsive columns
-		row := highlight + styledName + "  " + styledStatus
-		if showUptime {
-			row += " " + styledUptime
-		}
-		if showRestarts {
-			row += " " + styledRestarts
-		}
+		// Combine
+		row := highlight + styledName + "  " + styledStatus + " " + styledUptime + " " + styledRestarts
 
 		rows = append(rows, row)
 	}
@@ -495,7 +454,7 @@ func renderCompactServicesTable(services []Service, selectedIndex int, width int
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("#4A90E2")).
 		Padding(0, 1).
-		Width(safeStyleWidth(width))
+		Width(width - 2)
 
 	return style.Render(table)
 }
@@ -580,8 +539,8 @@ func renderCombinedLogsContent(services []Service, maxWidth int) string {
 
 			// Calculate available width for message
 			availableWidth := maxWidth - prefixWidth
-			if availableWidth < 10 {
-				availableWidth = 10 // Minimum message width
+			if availableWidth < 20 {
+				availableWidth = 20 // Minimum message width
 			}
 
 			// Wrap message to fit available width
@@ -707,6 +666,11 @@ func (u *UI) renderAddServiceOverlay() string {
 		width = 120 // fallback
 	}
 
+	// Ensure minimum width (same as main UI)
+	if width < 60 {
+		width = 60
+	}
+
 	// Calculate maximum service name length (exact same as main UI)
 	maxNameLen := 7 // minimum for "SERVICE" header
 	for _, serviceName := range u.availableServices {
@@ -733,8 +697,8 @@ func (u *UI) renderAddServiceOverlay() string {
 
 	// Separator matches available width (exact copy from main UI)
 	sepWidth := width - 6 // subtract border (2) and padding (4)
-	if sepWidth < 1 {
-		sepWidth = 1
+	if sepWidth < 50 {
+		sepWidth = 50
 	}
 	if sepWidth > 200 {
 		sepWidth = 200 // Maximum separator width
@@ -794,7 +758,7 @@ func (u *UI) renderAddServiceOverlay() string {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("#4A90E2")).
 		Padding(0, 1).
-		Width(safeStyleWidth(width))
+		Width(width - 2)
 
 	overlayBox := style.Render(table)
 
@@ -810,8 +774,9 @@ func (u *UI) renderAddServiceOverlay() string {
 
 // renderCompactHelp renders compact help at bottom
 func renderCompactHelp(width int) string {
-	if width <= 0 {
-		width = 80
+	// Ensure minimum width
+	if width < 60 {
+		width = 60
 	}
 
 	help := lipgloss.NewStyle().
@@ -822,7 +787,7 @@ func renderCompactHelp(width int) string {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("#4DD4FF")).
 		Padding(0, 1).
-		Width(safeStyleWidth(width))
+		Width(width - 2)
 
 	return style.Render(help)
 }
@@ -885,38 +850,4 @@ func tickCmd(interval time.Duration) tea.Cmd {
 	return tea.Tick(interval, func(t time.Time) tea.Msg {
 		return tickMsg(t)
 	})
-}
-
-func safeStyleWidth(width int) int {
-	if width <= 2 {
-		if width < 0 {
-			return 0
-		}
-		return width
-	}
-	return width - 2
-}
-
-func serviceLogsChanged(newSvc *Service, oldSvc *Service) bool {
-	if len(newSvc.LogHistory) != len(oldSvc.LogHistory) {
-		return true
-	}
-	if len(newSvc.LogHistory) == 0 {
-		return false
-	}
-	newLast := newSvc.LogHistory[len(newSvc.LogHistory)-1]
-	oldLast := oldSvc.LogHistory[len(oldSvc.LogHistory)-1]
-	return !newLast.Time.Equal(oldLast.Time) || newLast.IsError != oldLast.IsError || newLast.Message != oldLast.Message
-}
-
-func (u *UI) computeSectionHeights() (int, int) {
-	if u.width <= 0 {
-		return 0, 0
-	}
-	services := renderEmpty()
-	if len(u.services) > 0 {
-		services = renderServicesSection(u.services, u.selectedIndex, u.width)
-	}
-	help := renderCompactHelp(u.width)
-	return lipgloss.Height(services), lipgloss.Height(help)
 }
