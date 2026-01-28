@@ -384,7 +384,9 @@ func (m *Manager) runOnce(ctx context.Context, svc *Service) {
 	if err := cmd.Start(); err != nil {
 		errorMsg := fmt.Sprintf("Start failed: %v", err)
 		svc.addError(errorMsg)
-		fmt.Fprintf(os.Stderr, "[%s] ERROR: %v\n", svc.Name, err)
+		if stderrEnabled() {
+			fmt.Fprintf(os.Stderr, "[%s] ERROR: %v\n", svc.Name, err)
+		}
 		return
 	}
 
@@ -397,7 +399,9 @@ func (m *Manager) runOnce(ctx context.Context, svc *Service) {
 	if err != nil && ctx.Err() == nil {
 		errorMsg := fmt.Sprintf("Process died: %v", err)
 		svc.addError(errorMsg)
-		fmt.Fprintf(os.Stderr, "[%s] ERROR: Process died: %v\n", svc.Name, err)
+		if stderrEnabled() {
+			fmt.Fprintf(os.Stderr, "[%s] ERROR: Process died: %v\n", svc.Name, err)
+		}
 	}
 }
 
@@ -474,7 +478,9 @@ func (m *Manager) monitorOutput(svc *Service, pipe interface{}, _ interface{}, i
 					if isErrorMsg {
 						errorMsg := extractErrorMessage(line)
 						svc.addError(errorMsg)
-						fmt.Fprintf(os.Stderr, "[%s] ERROR: %s\n", svc.Name, errorMsg)
+						if stderrEnabled() {
+							fmt.Fprintf(os.Stderr, "[%s] ERROR: %s\n", svc.Name, errorMsg)
+						}
 					}
 				}
 			}
@@ -496,6 +502,11 @@ func extractErrorMessage(output string) string {
 	output = strings.Join(strings.Fields(output), " ")
 
 	return output
+}
+
+func stderrEnabled() bool {
+	raw := strings.TrimSpace(strings.ToLower(os.Getenv("PF_STDERR")))
+	return raw == "1" || raw == "true" || raw == "yes" || raw == "on"
 }
 
 // Stop stops a service
