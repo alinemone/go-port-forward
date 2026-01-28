@@ -216,7 +216,12 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			u.viewport.Height = viewportHeight
 
 			// Only update content if it actually changed
-			newContent := renderCombinedLogsContent(u.services)
+			// Pass viewport width for proper wrapping (subtract border width)
+			contentWidth := u.viewport.Width - 4 // Account for border and padding
+			if contentWidth < 40 {
+				contentWidth = 40 // Minimum width
+			}
+			newContent := renderCombinedLogsContent(u.services, contentWidth)
 			if newContent != u.lastRenderHash {
 				u.viewport.SetContent(newContent)
 				u.lastRenderHash = newContent
@@ -474,8 +479,8 @@ func formatUptime(startTime time.Time) string {
 	return fmt.Sprintf("%ds", seconds)
 }
 
-// renderCombinedLogsContent renders logs content for viewport
-func renderCombinedLogsContent(services []Service) string {
+// renderCombinedLogsContent renders logs content for viewport with proper width handling
+func renderCombinedLogsContent(services []Service, maxWidth int) string {
 	var content strings.Builder
 
 	// Collect all logs with service name
@@ -516,14 +521,9 @@ func renderCombinedLogsContent(services []Service) string {
 				serviceName = serviceName[:9] + "..."
 			}
 
-			// Truncate very long messages to prevent layout breaking
-			message := log.Entry.Message
-			if len(message) > 200 {
-				message = message[:197] + "..."
-			}
-
 			// Message style based on error or info
 			var msgColor lipgloss.Color
+			message := log.Entry.Message
 			if log.Entry.IsError {
 				msgColor = lipgloss.Color("#FF6B6B")
 			} else if strings.Contains(message, "━━━━") {
@@ -531,6 +531,20 @@ func renderCombinedLogsContent(services []Service) string {
 			} else {
 				msgColor = lipgloss.Color("#E0E0E0")
 			}
+
+			// Calculate prefix width: [serviceName timestamp]
+			// serviceName is always 12 chars, timestamp is 8 chars, brackets and spaces = 5
+			// Total prefix = 1 + 12 + 1 + 8 + 2 = 24 chars
+			prefixWidth := 24
+
+			// Calculate available width for message
+			availableWidth := maxWidth - prefixWidth
+			if availableWidth < 20 {
+				availableWidth = 20 // Minimum message width
+			}
+
+			// Wrap message to fit available width
+			wrappedLines := wrapText(message, availableWidth)
 
 			// Format: [service time] message
 			nameStyled := lipgloss.NewStyle().
@@ -542,18 +556,106 @@ func renderCombinedLogsContent(services []Service) string {
 				Foreground(lipgloss.Color("#808080")).
 				Render(timestamp)
 
-			msgStyled := lipgloss.NewStyle().
-				Foreground(msgColor).
-				Render(message)
+			// Render first line with prefix
+			if len(wrappedLines) > 0 {
+				msgStyled := lipgloss.NewStyle().
+					Foreground(msgColor).
+					Render(wrappedLines[0])
+				logLine := fmt.Sprintf("[%s %s] %s", nameStyled, timeStyled, msgStyled)
+				content.WriteString(logLine)
+				content.WriteString("\n")
 
-			logLine := fmt.Sprintf("[%s %s] %s", nameStyled, timeStyled, msgStyled)
-
-			content.WriteString(logLine)
-			content.WriteString("\n")
+				// Render continuation lines with proper indentation
+				if len(wrappedLines) > 1 {
+					indent := strings.Repeat(" ", prefixWidth)
+					for j := 1; j < len(wrappedLines); j++ {
+						msgStyled := lipgloss.NewStyle().
+							Foreground(msgColor).
+							Render(wrappedLines[j])
+						content.WriteString(indent + msgStyled + "\n")
+					}
+				}
+			}
 		}
 	}
 
 	return content.String()
+}
+
+// wrapText wraps text to fit within maxWidth, breaking at word boundaries
+func wrapText(text string, maxWidth int) []string {
+	if maxWidth <= 0 {
+		return []string{text}
+	}
+
+	// If text fits, return as-is
+	if len(text) <= maxWidth {
+		return []string{text}
+	}
+
+	var lines []string
+	words := strings.Fields(text)
+	if len(words) == 0 {
+		// Handle text with no spaces (long single word)
+		for i := 0; i < len(text); i += maxWidth {
+			end := i + maxWidth
+			if end > len(text) {
+				end = len(text)
+			}
+			lines = append(lines, text[i:end])
+		}
+		return lines
+	}
+
+	var currentLine strings.Builder
+	for _, word := range words {
+		// If word itself is longer than maxWidth, split it
+		if len(word) > maxWidth {
+			// Flush current line if not empty
+			if currentLine.Len() > 0 {
+				lines = append(lines, currentLine.String())
+				currentLine.Reset()
+			}
+			// Split the long word
+			for i := 0; i < len(word); i += maxWidth {
+				end := i + maxWidth
+				if end > len(word) {
+					end = len(word)
+				}
+				lines = append(lines, word[i:end])
+			}
+			continue
+		}
+
+		// Check if adding this word would exceed maxWidth
+		testLine := currentLine.String()
+		if len(testLine) > 0 {
+			testLine += " " + word
+		} else {
+			testLine = word
+		}
+
+		if len(testLine) > maxWidth {
+			// Flush current line and start new one
+			if currentLine.Len() > 0 {
+				lines = append(lines, currentLine.String())
+				currentLine.Reset()
+			}
+			currentLine.WriteString(word)
+		} else {
+			if currentLine.Len() > 0 {
+				currentLine.WriteString(" ")
+			}
+			currentLine.WriteString(word)
+		}
+	}
+
+	// Add the last line if not empty
+	if currentLine.Len() > 0 {
+		lines = append(lines, currentLine.String())
+	}
+
+	return lines
 }
 
 // renderAddServiceOverlay renders the service selection overlay
