@@ -11,7 +11,7 @@ import (
 	"software.sslmate.com/src/go-pkcs12"
 )
 
-// P12Config holds P12 certificate configuration
+// تنظیمات مربوط به گواهی P12
 type P12Config struct {
 	P12Path      string // Path to .p12 file
 	CertPath     string // Output path for certificate (PEM)
@@ -19,8 +19,8 @@ type P12Config struct {
 	extractedDir string // Internal: directory for extracted files
 }
 
-// ExtractP12 extracts certificate and private key from P12 file
-// Returns paths to extracted cert and key files
+// استخراج گواهی و کلید خصوصی از فایل P12
+// خروجی شامل مسیر فایل‌های استخراج‌شده است
 func ExtractP12(p12Path, password string) (*P12Config, error) {
 	// Read P12 file
 	p12Data, err := os.ReadFile(p12Path)
@@ -105,7 +105,7 @@ func ExtractP12(p12Path, password string) (*P12Config, error) {
 	}, nil
 }
 
-// LoadTLSConfig loads a TLS config from P12 (useful for custom HTTP clients)
+// ساخت TLS config از فایل P12 برای استفاده در کلاینت‌های سفارشی
 func LoadTLSConfig(p12Path, password string) (*tls.Config, error) {
 	p12Data, err := os.ReadFile(p12Path)
 	if err != nil {
@@ -136,7 +136,7 @@ func LoadTLSConfig(p12Path, password string) (*tls.Config, error) {
 	}, nil
 }
 
-// Cleanup removes extracted certificate files
+// پاک‌سازی فایل‌های استخراج‌شده گواهی
 func (c *P12Config) Cleanup() error {
 	if c.extractedDir == "" {
 		return nil

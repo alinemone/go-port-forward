@@ -8,21 +8,21 @@ import (
 	"sync"
 )
 
-// Manager manages certificate configuration
+// مدیریت تنظیمات گواهی‌نامه
 type Manager struct {
 	configPath string
 	config     *P12Config // Single global certificate
 	mu         sync.RWMutex
 }
 
-// CertStorageConfig represents the JSON structure for certificate storage
+// ساختار ذخیره‌سازی گواهی در فایل JSON
 type CertStorageConfig struct {
 	P12Path  string `json:"p12_path"`
 	CertPath string `json:"cert_path"`
 	KeyPath  string `json:"key_path"`
 }
 
-// NewManager creates a new certificate manager
+// ساخت مدیر گواهی‌نامه و بارگذاری تنظیمات
 func NewManager() (*Manager, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -52,7 +52,7 @@ func NewManager() (*Manager, error) {
 	return manager, nil
 }
 
-// AddCertificate adds a global certificate
+// افزودن گواهی سراسری برای همه سرویس‌ها
 func (m *Manager) AddCertificate(p12Path, password string) error {
 	// Extract P12
 	config, err := ExtractP12(p12Path, password)
@@ -68,7 +68,7 @@ func (m *Manager) AddCertificate(p12Path, password string) error {
 	return m.save()
 }
 
-// GetCertificate returns the global certificate config
+// دریافت گواهی ثبت‌شده
 func (m *Manager) GetCertificate() (*P12Config, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -80,7 +80,7 @@ func (m *Manager) GetCertificate() (*P12Config, bool) {
 	return m.config, true
 }
 
-// RemoveCertificate removes the global certificate
+// حذف گواهی ثبت‌شده
 func (m *Manager) RemoveCertificate() error {
 	m.mu.Lock()
 	exists := m.config != nil
@@ -94,7 +94,7 @@ func (m *Manager) RemoveCertificate() error {
 	return m.save()
 }
 
-// save persists certificate config to disk
+// ذخیره تنظیمات گواهی روی دیسک
 func (m *Manager) save() error {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -121,7 +121,7 @@ func (m *Manager) save() error {
 	return os.WriteFile(m.configPath, data, 0600)
 }
 
-// load reads certificate config from disk
+// خواندن تنظیمات گواهی از دیسک
 func (m *Manager) load() error {
 	data, err := os.ReadFile(m.configPath)
 	if err != nil {
