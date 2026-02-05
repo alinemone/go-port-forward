@@ -14,49 +14,43 @@ import (
 
 type tickMsg time.Time
 
-// UI model
+// مدل اصلی UI
 type UI struct {
-	manager              *Manager
-	services             []Service
-	selectedIndex        int
-	quitting             bool
-	width                int
-	height               int
-	viewport             viewport.Model
-	ready                bool
-	ctx                  context.Context
-	addingService        bool
-	availableServices    []string
-	selectedServiceIndex int
-	selectedServices     map[string]bool // For multi-select
-
-	// Performance optimizations
-	lastRenderHash string        // Cache for rendered content
-	tickInterval   time.Duration // Dynamic tick rate
-	lastActivity   time.Time     // Last activity timestamp
+	manager       *ServiceManager
+	services      []Service
+	cursorIndex   int
+	quitting      bool
+	width         int
+	height        int
+	viewport      viewport.Model
+	ready         bool
+	ctx           context.Context
+	addMode       bool
+	addCandidates []string
+	addCursor     int
+	addSelected   map[string]bool
 }
 
-// NewUI creates a new UI
-func NewUI(manager *Manager, ctx context.Context) *UI {
+const uiTickInterval = 500 * time.Millisecond
+
+// ساخت مدل UI جدید
+func NewUI(manager *ServiceManager, ctx context.Context) *UI {
 	return &UI{
-		manager:       manager,
-		services:      []Service{},
-		selectedIndex: 0,
-		ctx:           ctx,
-		tickInterval:  500 * time.Millisecond, // Default tick rate
-		lastActivity:  time.Now(),
+		manager:  manager,
+		services: []Service{},
+		ctx:      ctx,
 	}
 }
 
-// Init initializes the UI
+// مقداردهی اولیه مدل Bubble Tea
 func (u *UI) Init() tea.Cmd {
 	return tea.Batch(
-		tickCmd(u.tickInterval),
+		tickCmd(uiTickInterval),
 		tea.EnterAltScreen,
 	)
 }
 
-// Update handles messages
+// مدیریت رویدادها و به‌روزرسانی وضعیت UI
 func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
@@ -65,21 +59,7 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		u.width = msg.Width
 		u.height = msg.Height
 
-		// Calculate dynamic viewport height
-		// Table: 4 (border + header + separator + bottom border) + number of services
-		// Log box border: 2 (top + bottom)
-		// Help: 3 (border + text)
-		// Total overhead: 9 + number of services
-		tableLines := 4 + len(u.services)
-		if len(u.services) == 0 {
-			tableLines = 1 // Just "No services running..."
-		}
-		overhead := tableLines + 2 + 3 // table + log border + help
-		viewportHeight := msg.Height - overhead
-		if viewportHeight < 3 {
-			viewportHeight = 3 // Minimum height
-		}
-
+		viewportHeight := calculateViewportHeight(len(u.services), u.height)
 		if !u.ready {
 			u.viewport = viewport.New(msg.Width, viewportHeight)
 			u.viewport.YPosition = 0
@@ -89,239 +69,90 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			u.viewport.Height = viewportHeight
 		}
 
-		// Reset render cache on resize to force recalculation
-		u.lastRenderHash = ""
-
 	case tea.KeyMsg:
-		// Handle service addition mode
-		if u.addingService {
-			switch msg.String() {
-			case "esc":
-				u.addingService = false
-				u.availableServices = nil
-				u.selectedServiceIndex = 0
-				u.selectedServices = nil
-			case "up", "k":
-				if u.selectedServiceIndex > 0 {
-					u.selectedServiceIndex--
-				}
-			case "down", "j":
-				if u.selectedServiceIndex < len(u.availableServices)-1 {
-					u.selectedServiceIndex++
-				}
-			case " ":
-				// Toggle selection for current item
-				if u.selectedServiceIndex < len(u.availableServices) {
-					serviceName := u.availableServices[u.selectedServiceIndex]
-					if serviceName != "(All services are already running)" {
-						if u.selectedServices == nil {
-							u.selectedServices = make(map[string]bool)
-						}
-						u.selectedServices[serviceName] = !u.selectedServices[serviceName]
-					}
-				}
-			case "enter":
-				// Add all selected services
-				if u.selectedServices != nil {
-					for serviceName, selected := range u.selectedServices {
-						if selected {
-							_ = u.manager.AddService(u.ctx, serviceName)
-						}
-					}
-				}
-				u.addingService = false
-				u.availableServices = nil
-				u.selectedServiceIndex = 0
-				u.selectedServices = nil
-			}
-			return u, cmd
+		keyRaw := msg.String()
+		key := keyRaw
+		if keyRaw != " " {
+			key = normalizeToken(keyRaw)
+		}
+		if u.addMode {
+			return u.updateAddMode(msg)
 		}
 
-		// Normal mode handling
-		switch msg.String() {
+		switch key {
 		case "q", "ctrl+c", "esc":
 			u.quitting = true
-			u.manager.StopAll()
+			u.manager.StopAllServices()
 			return u, tea.Quit
 
 		case "up", "k":
-			if u.selectedIndex > 0 {
-				u.selectedIndex--
+			if u.cursorIndex > 0 {
+				u.cursorIndex--
 			} else {
-				// Pass to viewport for scrolling
 				u.viewport, cmd = u.viewport.Update(msg)
 			}
 
 		case "down", "j":
-			if u.selectedIndex < len(u.services)-1 {
-				u.selectedIndex++
+			if u.cursorIndex < len(u.services)-1 {
+				u.cursorIndex++
 			} else {
-				// Pass to viewport for scrolling
 				u.viewport, cmd = u.viewport.Update(msg)
 			}
 
 		case "r":
-			// Restart selected service
-			if u.selectedIndex < len(u.services) && len(u.services) > 0 {
-				serviceName := u.services[u.selectedIndex].Name
-				u.manager.Restart(u.ctx, serviceName)
+			if u.cursorIndex < len(u.services) && len(u.services) > 0 {
+				serviceName := u.services[u.cursorIndex].Name
+				u.manager.RestartService(u.ctx, serviceName)
 			}
 
 		case "s":
-			// Stop selected service
-			if u.selectedIndex < len(u.services) && len(u.services) > 0 {
-				u.manager.Stop(u.services[u.selectedIndex].Name)
+			if u.cursorIndex < len(u.services) && len(u.services) > 0 {
+				u.manager.StopService(u.services[u.cursorIndex].Name)
 			}
 
 		case "a":
-			// Add new service
-			u.enterAddServiceMode()
+			u.enterAddMode()
 
 		default:
-			// Pass other keys to viewport
 			u.viewport, cmd = u.viewport.Update(msg)
 		}
 
 	case tickMsg:
-		// Update services
-		newServices := u.manager.GetStates()
-
-		// Check if there are any changes that require UI update
-		hasChanges := len(newServices) != len(u.services)
-		if !hasChanges {
-			for i := range newServices {
-				svc := &newServices[i]
-				if i >= len(u.services) || svc.Status != u.services[i].Status ||
-					svc.Error != u.services[i].Error || svc.ReconnectCount != u.services[i].ReconnectCount {
-					hasChanges = true
-					break
-				}
-			}
-		}
-
-		u.services = newServices
-
-		// Update viewport content only if there are changes
-		if u.ready && hasChanges {
-			// Recalculate viewport height based on current number of services
-			tableLines := 4 + len(u.services)
-			if len(u.services) == 0 {
-				tableLines = 1
-			}
-			overhead := tableLines + 2 + 3 // table + log border + help
-			viewportHeight := u.height - overhead
-			if viewportHeight < 3 {
-				viewportHeight = 3
-			}
-			u.viewport.Height = viewportHeight
-
-			// Only update content if it actually changed
-			// Pass viewport width for proper wrapping (subtract border width)
-			contentWidth := u.viewport.Width - 4 // Account for border and padding
-			if contentWidth < 40 {
-				contentWidth = 40 // Minimum width
-			}
-			newContent := renderCombinedLogsContent(u.services, contentWidth)
-			if newContent != u.lastRenderHash {
-				u.viewport.SetContent(newContent)
-				u.lastRenderHash = newContent
-				u.viewport.GotoBottom()
-			}
-
-			// Update activity timestamp
-			u.lastActivity = time.Now()
-		}
-
-		// Adjust selected index if needed
-		if u.selectedIndex >= len(u.services) && len(u.services) > 0 {
-			u.selectedIndex = len(u.services) - 1
-		}
-
-		// Dynamic tick rate based on activity
-		newInterval := u.tickInterval
-		timeSinceActivity := time.Since(u.lastActivity)
-
-		// Slow down tick rate if no recent activity
-		if timeSinceActivity > 30*time.Second {
-			newInterval = 2000 * time.Millisecond // 2 seconds
-		} else if timeSinceActivity > 10*time.Second {
-			newInterval = 1000 * time.Millisecond // 1 second
-		} else if timeSinceActivity > 5*time.Second {
-			newInterval = 750 * time.Millisecond // 750ms
-		} else {
-			newInterval = 500 * time.Millisecond // 500ms default
-		}
-
-		// Update tick interval if changed
-		if newInterval != u.tickInterval {
-			u.tickInterval = newInterval
-		}
-
-		return u, tickCmd(u.tickInterval)
+		u.services = u.manager.ListServiceStates()
+		u.ensureCursorInRange()
+		u.refreshViewportContent()
+		return u, tickCmd(uiTickInterval)
 	}
 
 	return u, cmd
 }
 
-// View renders the UI
+// رندر رابط کاربری
 func (u *UI) View() string {
 	if u.quitting {
-		return renderShutdown()
+		return renderShutdownScreen()
 	}
 
 	if !u.ready {
 		return "Initializing..."
 	}
 
-	// If in add service mode, show overlay from top
-	if u.addingService {
-		overlayContent := u.renderAddServiceOverlay()
-
-		// Render overlay at top without centering
-		var sections []string
-		sections = append(sections, overlayContent)
-
-		// Fill remaining space (overlay is now taller with instructions below)
-		remainingSpace := u.height - 15 // Estimate overlay height + instructions
-		for i := 0; i < remainingSpace && i > 0; i++ {
-			sections = append(sections, strings.Repeat(" ", u.width))
-		}
-
-		return lipgloss.JoinVertical(lipgloss.Left, sections...)
+	if u.addMode {
+		return u.renderAddServiceOverlay()
 	}
 
-	// Ensure viewport has correct dimensions before rendering
-	if u.width > 0 && u.height > 0 {
-		tableLines := 4 + len(u.services)
-		if len(u.services) == 0 {
-			tableLines = 1
-		}
-		overhead := tableLines + 2 + 3
-		viewportHeight := u.height - overhead
-		if viewportHeight < 3 {
-			viewportHeight = 3
-		}
-		if u.viewport.Height != viewportHeight {
-			u.viewport.Height = viewportHeight
-		}
-		if u.viewport.Width != u.width {
-			u.viewport.Width = u.width
-		}
-	}
+	u.ensureViewportSize()
 
-	var sections []string
-
-	// Services Table (compact)
+	sections := make([]string, 0, 3)
 	if len(u.services) == 0 {
-		sections = append(sections, renderEmpty())
+		sections = append(sections, renderEmptyState())
 	} else {
-		sections = append(sections, renderCompactServicesTable(u.services, u.selectedIndex, u.width))
+		sections = append(sections, renderServiceTable(u.services, u.cursorIndex, u.width))
 	}
 
-	// Scrollable logs with border (full width)
 	logBoxWidth := u.width - 2
 	if logBoxWidth < 58 {
-		logBoxWidth = 58 // Minimum width
+		logBoxWidth = 58
 	}
 	logBox := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -330,62 +161,183 @@ func (u *UI) View() string {
 		Render(u.viewport.View())
 	sections = append(sections, logBox)
 
-	// Help always at bottom (full width)
-	sections = append(sections, renderCompactHelp(u.width))
-
+	sections = append(sections, renderHelp(u.width))
 	return lipgloss.JoinVertical(lipgloss.Left, sections...)
 }
 
-// renderEmpty renders empty state
-func renderEmpty() string {
+// ورود به حالت افزودن سرویس
+func (u *UI) enterAddMode() {
+	storage := NewStorage()
+	allServices, err := storage.ListServiceNames()
+	if err != nil {
+		return
+	}
+
+	runningServices := u.manager.ListServiceStates()
+	runningMap := make(map[string]bool)
+	for i := range runningServices {
+		runningMap[runningServices[i].Name] = true
+	}
+
+	available := make([]string, 0)
+	for _, serviceName := range allServices {
+		if !runningMap[serviceName] {
+			available = append(available, serviceName)
+		}
+	}
+
+	if len(allServices) > 0 {
+		u.addMode = true
+		if len(available) == 0 {
+			u.addCandidates = []string{"(All services are already running)"}
+		} else {
+			u.addCandidates = available
+		}
+		u.addCursor = 0
+		u.addSelected = make(map[string]bool)
+	}
+}
+
+// پردازش کلیدها در حالت افزودن سرویس
+func (u *UI) updateAddMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	keyRaw := msg.String()
+	key := keyRaw
+	if keyRaw != " " {
+		key = normalizeToken(keyRaw)
+	}
+	switch key {
+	case "esc":
+		u.addMode = false
+		u.addCandidates = nil
+		u.addCursor = 0
+		u.addSelected = nil
+	case "up", "k":
+		if u.addCursor > 0 {
+			u.addCursor--
+		}
+	case "down", "j":
+		if u.addCursor < len(u.addCandidates)-1 {
+			u.addCursor++
+		}
+	case " ":
+		if u.addCursor < len(u.addCandidates) {
+			serviceName := u.addCandidates[u.addCursor]
+			if serviceName != "(All services are already running)" {
+				u.addSelected[serviceName] = !u.addSelected[serviceName]
+			}
+		}
+	case "enter":
+		for serviceName, selected := range u.addSelected {
+			if selected {
+				_ = u.manager.StartStoredService(u.ctx, serviceName)
+			}
+		}
+		u.addMode = false
+		u.addCandidates = nil
+		u.addCursor = 0
+		u.addSelected = nil
+	}
+	return u, nil
+}
+
+// اطمینان از معتبر بودن موقعیت انتخاب
+func (u *UI) ensureCursorInRange() {
+	if u.cursorIndex >= len(u.services) && len(u.services) > 0 {
+		u.cursorIndex = len(u.services) - 1
+	}
+	if len(u.services) == 0 {
+		u.cursorIndex = 0
+	}
+}
+
+// به‌روزرسانی محتوای viewport لاگ‌ها
+func (u *UI) refreshViewportContent() {
+	if !u.ready {
+		return
+	}
+
+	u.ensureViewportSize()
+	contentWidth := u.viewport.Width - 4
+	if contentWidth < 40 {
+		contentWidth = 40
+	}
+
+	newContent := renderLogsContent(u.services, contentWidth)
+	u.viewport.SetContent(newContent)
+	u.viewport.GotoBottom()
+}
+
+// تنظیم اندازه viewport بر اساس ارتفاع پنجره
+func (u *UI) ensureViewportSize() {
+	if u.width == 0 || u.height == 0 {
+		return
+	}
+
+	viewportHeight := calculateViewportHeight(len(u.services), u.height)
+	if u.viewport.Height != viewportHeight {
+		u.viewport.Height = viewportHeight
+	}
+	if u.viewport.Width != u.width {
+		u.viewport.Width = u.width
+	}
+}
+
+// محاسبه ارتفاع مناسب برای viewport
+func calculateViewportHeight(serviceCount, totalHeight int) int {
+	tableLines := 4 + serviceCount
+	if serviceCount == 0 {
+		tableLines = 1
+	}
+	overhead := tableLines + 2 + 3
+	viewportHeight := totalHeight - overhead
+	if viewportHeight < 3 {
+		viewportHeight = 3
+	}
+	return viewportHeight
+}
+
+// نمایش حالت بدون سرویس
+func renderEmptyState() string {
 	emptyStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#808080")).
 		Italic(true)
 	return emptyStyle.Render("⚬ No services running...")
 }
 
-// renderCompactServicesTable renders a compact services table
-func renderCompactServicesTable(services []Service, selectedIndex int, width int) string {
-	// Ensure minimum width
+// رندر جدول سرویس‌ها
+func renderServiceTable(services []Service, selectedIndex int, width int) string {
 	if width < 60 {
 		width = 60
 	}
 
-	// Calculate maximum service name length
-	maxNameLen := 7 // minimum for "SERVICE" header
+	maxNameLen := 7
 	for i := range services {
 		nameLen := len(services[i].Name)
 		if nameLen > maxNameLen {
 			maxNameLen = nameLen
 		}
 	}
-	// Cap at reasonable maximum to prevent table from being too wide
 	if maxNameLen > 30 {
 		maxNameLen = 30
 	}
 
-	var rows []string
-
-	// Compact header with dynamic width
+	rows := make([]string, 0, len(services)+2)
 	headerName := fmt.Sprintf("%-*s", maxNameLen, "SERVICE")
 	header := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#FFFFFF")).
 		Bold(true).
-		Render(headerName + "  STATUS       UPTIME   RESTARTS")
-
+		Render(headerName + "  STATUS       UPTIME   PORT   RESTARTS")
 	rows = append(rows, header)
 
-	// Separator matches available width (accounting for border and padding)
-	sepWidth := width - 6 // subtract border (2) and padding (4)
+	sepWidth := width - 6
 	if sepWidth < 50 {
 		sepWidth = 50
 	}
 	if sepWidth > 200 {
-		sepWidth = 200 // Maximum separator width
+		sepWidth = 200
 	}
 	rows = append(rows, strings.Repeat("─", sepWidth))
 
-	// Service rows
 	for i := range services {
 		svc := &services[i]
 		var statusIcon, statusText string
@@ -413,7 +365,6 @@ func renderCompactServicesTable(services []Service, selectedIndex int, width int
 
 		uptime := formatUptime(svc.StartTime)
 
-		// Build row parts - truncate long service names with ellipsis if needed
 		displayName := svc.Name
 		if len(displayName) > maxNameLen {
 			displayName = displayName[:maxNameLen-3] + "..."
@@ -421,9 +372,9 @@ func renderCompactServicesTable(services []Service, selectedIndex int, width int
 		name := fmt.Sprintf("%-*s", maxNameLen, displayName)
 		status := fmt.Sprintf("%s %-10s", statusIcon, statusText)
 		uptimeStr := fmt.Sprintf("%-8s", uptime)
-		restarts := fmt.Sprintf("%d", svc.ReconnectCount)
+		portStr := fmt.Sprintf("%-6s", svc.LocalPort)
+		restarts := fmt.Sprintf("%d", svc.RestartCount)
 
-		// Style each part
 		styledName := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#E0E0E0")).
 			Bold(true).
@@ -441,15 +392,15 @@ func renderCompactServicesTable(services []Service, selectedIndex int, width int
 			Foreground(lipgloss.Color("#C0C0C0")).
 			Render(restarts)
 
-		// Combine
-		row := highlight + styledName + "  " + styledStatus + " " + styledUptime + " " + styledRestarts
+		styledPort := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#C0C0C0")).
+			Render(portStr)
 
+		row := highlight + styledName + "  " + styledStatus + " " + styledUptime + " " + styledPort + " " + styledRestarts
 		rows = append(rows, row)
 	}
 
 	table := lipgloss.JoinVertical(lipgloss.Left, rows...)
-
-	// Apply border with matching width
 	style := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("#4A90E2")).
@@ -459,14 +410,13 @@ func renderCompactServicesTable(services []Service, selectedIndex int, width int
 	return style.Render(table)
 }
 
-// formatUptime formats duration since start time
+// قالب‌بندی زمان روشن بودن سرویس
 func formatUptime(startTime time.Time) string {
 	if startTime.IsZero() {
 		return "-"
 	}
 
 	duration := time.Since(startTime)
-
 	hours := int(duration.Hours())
 	minutes := int(duration.Minutes()) % 60
 	seconds := int(duration.Seconds()) % 60
@@ -479,20 +429,19 @@ func formatUptime(startTime time.Time) string {
 	return fmt.Sprintf("%ds", seconds)
 }
 
-// renderCombinedLogsContent renders logs content for viewport with proper width handling
-func renderCombinedLogsContent(services []Service, maxWidth int) string {
+// رندر لاگ‌های ترکیبی برای viewport
+func renderLogsContent(services []Service, maxWidth int) string {
 	var content strings.Builder
 
-	// Collect all logs with service name
 	type LogWithService struct {
 		ServiceName string
 		Entry       LogEntry
 	}
 
-	var allLogs []LogWithService
+	allLogs := make([]LogWithService, 0)
 	for i := range services {
 		svc := &services[i]
-		for _, log := range svc.LogHistory {
+		for _, log := range svc.Logs {
 			allLogs = append(allLogs, LogWithService{
 				ServiceName: svc.Name,
 				Entry:       log,
@@ -500,7 +449,6 @@ func renderCombinedLogsContent(services []Service, maxWidth int) string {
 		}
 	}
 
-	// Sort by time
 	sort.Slice(allLogs, func(i, j int) bool {
 		return allLogs[i].Entry.Time.Before(allLogs[j].Entry.Time)
 	})
@@ -510,74 +458,63 @@ func renderCombinedLogsContent(services []Service, maxWidth int) string {
 			Foreground(lipgloss.Color("#808080")).
 			Italic(true).
 			Render("No logs yet..."))
-	} else {
-		for i := 0; i < len(allLogs); i++ {
-			log := allLogs[i]
-			timestamp := log.Entry.Time.Format("15:04:05")
+		return content.String()
+	}
 
-			// Service name adapts to available width
-			nameWidth := maxWidth / 4
-			if nameWidth < 8 {
-				nameWidth = 8
-			}
-			if nameWidth > 24 {
-				nameWidth = 24
-			}
-			serviceName := truncateRunesWithEllipsis(log.ServiceName, nameWidth)
-			namePlain := padRightRunes(serviceName, nameWidth)
+	for i := 0; i < len(allLogs); i++ {
+		log := allLogs[i]
+		timestamp := log.Entry.Time.Format("15:04:05")
 
-			// Message style based on error or info
-			var msgColor lipgloss.Color
-			message := log.Entry.Message
-			if log.Entry.IsError {
-				msgColor = lipgloss.Color("#FF6B6B")
-			} else if strings.Contains(message, "━━━━") {
-				msgColor = lipgloss.Color("#FFE66D")
-			} else {
-				msgColor = lipgloss.Color("#E0E0E0")
-			}
+		nameWidth := maxWidth / 4
+		if nameWidth < 8 {
+			nameWidth = 8
+		}
+		if nameWidth > 24 {
+			nameWidth = 24
+		}
+		serviceName := truncateRunes(log.ServiceName, nameWidth)
+		namePlain := padRightRunes(serviceName, nameWidth)
 
-			// Calculate prefix width: [serviceName timestamp]
-			// Total prefix = "[" + name + " " + timestamp + "] " => nameWidth + 12
-			prefixWidth := nameWidth + 12
+		message := log.Entry.Message
+		msgColor := lipgloss.Color("#E0E0E0")
+		if log.Entry.IsError {
+			msgColor = lipgloss.Color("#FF6B6B")
+		} else if strings.Contains(message, "━━━━") {
+			msgColor = lipgloss.Color("#FFE66D")
+		}
 
-			// Calculate available width for message
-			availableWidth := maxWidth - prefixWidth
-			if availableWidth < 20 {
-				availableWidth = 20 // Minimum message width
-			}
+		prefixWidth := nameWidth + 12
+		availableWidth := maxWidth - prefixWidth
+		if availableWidth < 20 {
+			availableWidth = 20
+		}
 
-			// Wrap message to fit available width
-			wrappedLines := wrapText(message, availableWidth)
+		wrappedLines := wrapText(message, availableWidth)
 
-			// Format: [service time] message
-			nameStyled := lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#4DD4FF")).
-				Bold(true).
-				Render(namePlain)
+		nameStyled := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#4DD4FF")).
+			Bold(true).
+			Render(namePlain)
 
-			timeStyled := lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#808080")).
-				Render(timestamp)
+		timeStyled := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#808080")).
+			Render(timestamp)
 
-			// Render first line with prefix
-			if len(wrappedLines) > 0 {
-				msgStyled := lipgloss.NewStyle().
-					Foreground(msgColor).
-					Render(wrappedLines[0])
-				logLine := fmt.Sprintf("[%s %s] %s", nameStyled, timeStyled, msgStyled)
-				content.WriteString(logLine)
-				content.WriteString("\n")
+		if len(wrappedLines) > 0 {
+			msgStyled := lipgloss.NewStyle().
+				Foreground(msgColor).
+				Render(wrappedLines[0])
+			logLine := fmt.Sprintf("[%s %s] %s", nameStyled, timeStyled, msgStyled)
+			content.WriteString(logLine)
+			content.WriteString("\n")
 
-				// Render continuation lines with proper indentation
-				if len(wrappedLines) > 1 {
-					indent := strings.Repeat(" ", prefixWidth)
-					for j := 1; j < len(wrappedLines); j++ {
-						msgStyled := lipgloss.NewStyle().
-							Foreground(msgColor).
-							Render(wrappedLines[j])
-						content.WriteString(indent + msgStyled + "\n")
-					}
+			if len(wrappedLines) > 1 {
+				indent := strings.Repeat(" ", prefixWidth)
+				for j := 1; j < len(wrappedLines); j++ {
+					msgStyled := lipgloss.NewStyle().
+						Foreground(msgColor).
+						Render(wrappedLines[j])
+					content.WriteString(indent + msgStyled + "\n")
 				}
 			}
 		}
@@ -586,13 +523,11 @@ func renderCombinedLogsContent(services []Service, maxWidth int) string {
 	return content.String()
 }
 
-// wrapText wraps text to fit within maxWidth, breaking at word boundaries
+// شکست متن برای رعایت عرض نمایش
 func wrapText(text string, maxWidth int) []string {
 	if maxWidth <= 0 {
 		return []string{text}
 	}
-
-	// If text fits, return as-is
 	if len(text) <= maxWidth {
 		return []string{text}
 	}
@@ -600,7 +535,6 @@ func wrapText(text string, maxWidth int) []string {
 	var lines []string
 	words := strings.Fields(text)
 	if len(words) == 0 {
-		// Handle text with no spaces (long single word)
 		for i := 0; i < len(text); i += maxWidth {
 			end := i + maxWidth
 			if end > len(text) {
@@ -613,14 +547,11 @@ func wrapText(text string, maxWidth int) []string {
 
 	var currentLine strings.Builder
 	for _, word := range words {
-		// If word itself is longer than maxWidth, split it
 		if len(word) > maxWidth {
-			// Flush current line if not empty
 			if currentLine.Len() > 0 {
 				lines = append(lines, currentLine.String())
 				currentLine.Reset()
 			}
-			// Split the long word
 			for i := 0; i < len(word); i += maxWidth {
 				end := i + maxWidth
 				if end > len(word) {
@@ -631,7 +562,6 @@ func wrapText(text string, maxWidth int) []string {
 			continue
 		}
 
-		// Check if adding this word would exceed maxWidth
 		testLine := currentLine.String()
 		if len(testLine) > 0 {
 			testLine += " " + word
@@ -640,7 +570,6 @@ func wrapText(text string, maxWidth int) []string {
 		}
 
 		if len(testLine) > maxWidth {
-			// Flush current line and start new one
 			if currentLine.Len() > 0 {
 				lines = append(lines, currentLine.String())
 				currentLine.Reset()
@@ -654,7 +583,6 @@ func wrapText(text string, maxWidth int) []string {
 		}
 	}
 
-	// Add the last line if not empty
 	if currentLine.Len() > 0 {
 		lines = append(lines, currentLine.String())
 	}
@@ -662,7 +590,8 @@ func wrapText(text string, maxWidth int) []string {
 	return lines
 }
 
-func truncateRunesWithEllipsis(text string, max int) string {
+// کوتاه‌سازی رشته با سه‌نقطه
+func truncateRunes(text string, max int) string {
 	if max <= 0 {
 		return ""
 	}
@@ -676,6 +605,7 @@ func truncateRunesWithEllipsis(text string, max int) string {
 	return string(runes[:max-3]) + "..."
 }
 
+// پر کردن فضای خالی برای هم‌ترازی
 func padRightRunes(text string, width int) string {
 	runes := []rune(text)
 	if len(runes) >= width {
@@ -684,84 +614,63 @@ func padRightRunes(text string, width int) string {
 	return text + strings.Repeat(" ", width-len(runes))
 }
 
-// renderAddServiceOverlay renders the service selection overlay
+// نمایش پنجره افزودن سرویس
 func (u *UI) renderAddServiceOverlay() string {
-	// Use exact same width as main UI
 	width := u.width
 	if width <= 0 {
-		width = 120 // fallback
+		width = 120
 	}
-
-	// Ensure minimum width (same as main UI)
 	if width < 60 {
 		width = 60
 	}
 
-	// Calculate maximum service name length (exact same as main UI)
-	maxNameLen := 7 // minimum for "SERVICE" header
-	for _, serviceName := range u.availableServices {
+	maxNameLen := 7
+	for _, serviceName := range u.addCandidates {
 		nameLen := len(serviceName)
 		if nameLen > maxNameLen {
 			maxNameLen = nameLen
 		}
 	}
-	// Cap at reasonable maximum to prevent table from being too wide (same as main UI)
 	if maxNameLen > 30 {
 		maxNameLen = 30
 	}
 
-	var rows []string
-
-	// Compact header with dynamic width (exact copy from main UI)
+	rows := make([]string, 0, len(u.addCandidates)+2)
 	headerName := fmt.Sprintf("%-*s", maxNameLen, "SERVICE")
 	header := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#FFFFFF")).
 		Bold(true).
 		Render(headerName + "  SELECT")
-
 	rows = append(rows, header)
 
-	// Separator matches available width (exact copy from main UI)
-	sepWidth := width - 6 // subtract border (2) and padding (4)
+	sepWidth := width - 6
 	if sepWidth < 50 {
 		sepWidth = 50
 	}
 	if sepWidth > 200 {
-		sepWidth = 200 // Maximum separator width
+		sepWidth = 200
 	}
 	rows = append(rows, strings.Repeat("─", sepWidth))
 
-	// Service rows with exact same styling as main UI
-	for i, serviceName := range u.availableServices {
-		// Highlight logic (same as main UI)
+	for i, serviceName := range u.addCandidates {
 		highlight := "  "
-		if i == u.selectedServiceIndex {
+		if i == u.addCursor {
 			highlight = "► "
 		}
 
-		// Checkbox status
-		isSelected := false
-		if u.selectedServices != nil && u.selectedServices[serviceName] {
-			isSelected = true
-		}
-
-		// Checkbox display
-		var checkbox string
+		isSelected := u.addSelected != nil && u.addSelected[serviceName]
+		checkbox := "[ ]"
 		if isSelected {
 			checkbox = "[✓]"
-		} else {
-			checkbox = "[ ]"
 		}
 
-		// Build row parts (exact same as main UI)
 		displayName := serviceName
 		if len(displayName) > maxNameLen {
 			displayName = displayName[:maxNameLen-3] + "..."
 		}
 		name := fmt.Sprintf("%-*s", maxNameLen, displayName)
-		selectStr := fmt.Sprintf("%-7s", checkbox) // Fixed width for select column
+		selectStr := fmt.Sprintf("%-7s", checkbox)
 
-		// Style each part (exact same as main UI)
 		styledName := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#E0E0E0")).
 			Bold(true).
@@ -771,15 +680,11 @@ func (u *UI) renderAddServiceOverlay() string {
 			Foreground(lipgloss.Color("#C0C0C0")).
 			Render(selectStr)
 
-		// Combine (exact same as main UI)
 		row := highlight + styledName + "  " + styledSelect
-
 		rows = append(rows, row)
 	}
 
 	table := lipgloss.JoinVertical(lipgloss.Left, rows...)
-
-	// Apply border with matching width (exact same as main UI)
 	style := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("#4A90E2")).
@@ -788,19 +693,16 @@ func (u *UI) renderAddServiceOverlay() string {
 
 	overlayBox := style.Render(table)
 
-	// Add instructions below the main box
 	instructions := "↑↓:navigate • Space:toggle selection • Enter:add selected • Esc:cancel"
 	instructionStyled := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#808080")).
 		Render(instructions)
 
-	// Combine box and instructions with spacing
 	return lipgloss.JoinVertical(lipgloss.Left, overlayBox, instructionStyled)
 }
 
-// renderCompactHelp renders compact help at bottom
-func renderCompactHelp(width int) string {
-	// Ensure minimum width
+// نمایش راهنمای کلیدها
+func renderHelp(width int) string {
 	if width < 60 {
 		width = 60
 	}
@@ -818,8 +720,8 @@ func renderCompactHelp(width int) string {
 	return style.Render(help)
 }
 
-// renderShutdown renders shutdown message
-func renderShutdown() string {
+// نمایش پیام خروج امن
+func renderShutdownScreen() string {
 	shutdownStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#6FFFB0")).
 		Bold(true)
@@ -833,45 +735,7 @@ func renderShutdown() string {
 	return box.Render(shutdownStyle.Render("✓ Shutting down gracefully..."))
 }
 
-// tickCmd returns a tick command
-// enterAddServiceMode enters the service addition mode
-func (u *UI) enterAddServiceMode() {
-	// Get all available services from storage
-	storage := NewStorage()
-	allServices, err := storage.GetAllServiceNames()
-	if err != nil {
-		return // Silently fail if we can't load services
-	}
-
-	// Get currently running services
-	runningServices := u.manager.GetStates()
-	runningMap := make(map[string]bool)
-	for i := range runningServices {
-		runningMap[runningServices[i].Name] = true
-	}
-
-	// Filter out already running services
-	available := make([]string, 0)
-	for _, serviceName := range allServices {
-		if !runningMap[serviceName] {
-			available = append(available, serviceName)
-		}
-	}
-
-	// Always enter add mode if we have services at all
-	if len(allServices) > 0 {
-		u.addingService = true
-		if len(available) == 0 {
-			// Show a message if all services are running
-			u.availableServices = []string{"(All services are already running)"}
-		} else {
-			u.availableServices = available
-		}
-		u.selectedServiceIndex = 0
-		u.selectedServices = make(map[string]bool) // Initialize for multi-select
-	}
-}
-
+// ساخت فرمان تیک برای بروزرسانی دوره‌ای
 func tickCmd(interval time.Duration) tea.Cmd {
 	return tea.Tick(interval, func(t time.Time) tea.Msg {
 		return tickMsg(t)

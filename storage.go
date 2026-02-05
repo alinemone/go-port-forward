@@ -9,19 +9,19 @@ import (
 	"sort"
 )
 
-// StorageData represents the complete storage structure
+// ساختار کامل داده‌های ذخیره‌سازی
 type StorageData struct {
 	Services map[string]string   `json:"services,omitempty"`
 	Groups   map[string][]string `json:"groups,omitempty"`
-	Legacy   map[string]string   `json:"-"` // For backward compatibility
+	Legacy   map[string]string   `json:"-"`
 }
 
-// Storage manages service persistence
+// مدیریت ذخیره‌سازی سرویس‌ها و گروه‌ها
 type Storage struct {
 	filePath string
 }
 
-// NewStorage creates a new storage instance
+// ساخت نمونه ذخیره‌سازی بر اساس مسیر فایل اجرایی
 func NewStorage() *Storage {
 	exe, _ := os.Executable()
 	exeDir := filepath.Dir(exe)
@@ -30,8 +30,8 @@ func NewStorage() *Storage {
 	}
 }
 
-// LoadData loads complete storage data from disk
-func (s *Storage) LoadData() (*StorageData, error) {
+// خواندن کامل داده‌ها از دیسک
+func (s *Storage) readStorage() (*StorageData, error) {
 	if _, err := os.Stat(s.filePath); os.IsNotExist(err) {
 		return &StorageData{
 			Services: make(map[string]string),
@@ -44,7 +44,6 @@ func (s *Storage) LoadData() (*StorageData, error) {
 		return nil, err
 	}
 
-	// Try new format first
 	var storageData StorageData
 	if err := json.Unmarshal(data, &storageData); err == nil && storageData.Services != nil {
 		if storageData.Groups == nil {
@@ -53,7 +52,6 @@ func (s *Storage) LoadData() (*StorageData, error) {
 		return &storageData, nil
 	}
 
-	// Fallback to legacy format (backward compatibility)
 	var legacy map[string]string
 	if err := json.Unmarshal(data, &legacy); err != nil {
 		return nil, err
@@ -65,8 +63,8 @@ func (s *Storage) LoadData() (*StorageData, error) {
 	}, nil
 }
 
-// SaveData saves complete storage data to disk
-func (s *Storage) SaveData(data *StorageData) error {
+// ذخیره کامل داده‌ها روی دیسک
+func (s *Storage) writeStorage(data *StorageData) error {
 	jsonData, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
 		return err
@@ -74,38 +72,38 @@ func (s *Storage) SaveData(data *StorageData) error {
 	return os.WriteFile(s.filePath, jsonData, 0644)
 }
 
-// Load loads all services from disk (backward compatibility)
-func (s *Storage) Load() (map[string]string, error) {
-	data, err := s.LoadData()
+// بارگذاری سرویس‌ها (سازگار با نسخه‌های قدیمی)
+func (s *Storage) LoadServices() (map[string]string, error) {
+	data, err := s.readStorage()
 	if err != nil {
 		return nil, err
 	}
 	return data.Services, nil
 }
 
-// Save saves all services to disk (backward compatibility)
-func (s *Storage) Save(services map[string]string) error {
-	data, err := s.LoadData()
+// ذخیره سرویس‌ها (سازگار با نسخه‌های قدیمی)
+func (s *Storage) saveServices(services map[string]string) error {
+	data, err := s.readStorage()
 	if err != nil {
 		return err
 	}
 	data.Services = services
-	return s.SaveData(data)
+	return s.writeStorage(data)
 }
 
-// Add adds a new service
-func (s *Storage) Add(name, command string) error {
-	services, err := s.Load()
+// افزودن سرویس جدید
+func (s *Storage) AddService(name, command string) error {
+	services, err := s.LoadServices()
 	if err != nil {
 		return err
 	}
 	services[name] = command
-	return s.Save(services)
+	return s.saveServices(services)
 }
 
-// Delete deletes a service
-func (s *Storage) Delete(name string) error {
-	services, err := s.Load()
+// حذف سرویس از ذخیره‌سازی
+func (s *Storage) DeleteService(name string) error {
+	services, err := s.LoadServices()
 	if err != nil {
 		return err
 	}
@@ -115,12 +113,12 @@ func (s *Storage) Delete(name string) error {
 	}
 
 	delete(services, name)
-	return s.Save(services)
+	return s.saveServices(services)
 }
 
-// Get retrieves a single service
-func (s *Storage) Get(name string) (string, error) {
-	services, err := s.Load()
+// دریافت فرمان یک سرویس
+func (s *Storage) GetService(name string) (string, error) {
+	services, err := s.LoadServices()
 	if err != nil {
 		return "", err
 	}
@@ -133,29 +131,28 @@ func (s *Storage) Get(name string) (string, error) {
 	return cmd, nil
 }
 
-// ExtractPorts extracts local and remote ports from command
-func ExtractPorts(command string) (local, remote string) {
-	re := regexp.MustCompile(`(\d+):(\d+)`)
-	matches := re.FindStringSubmatch(command)
+var portRegex = regexp.MustCompile(`(\d+):(\d+)`)
+
+// استخراج پورت‌ها از فرمان اجرا
+func parsePortsFromCommand(command string) (local, remote string) {
+	matches := portRegex.FindStringSubmatch(command)
 	if len(matches) == 3 {
 		return matches[1], matches[2]
 	}
 	return "", ""
 }
 
-// AddGroup adds a new group
+// افزودن گروه جدید
 func (s *Storage) AddGroup(name string, services []string) error {
-	data, err := s.LoadData()
+	data, err := s.readStorage()
 	if err != nil {
 		return err
 	}
 
-	// Check for conflicts
 	if _, exists := data.Services[name]; exists {
 		return fmt.Errorf("a service with name '%s' already exists, cannot create group with same name", name)
 	}
 
-	// Validate all services exist
 	for _, svcName := range services {
 		if _, exists := data.Services[svcName]; !exists {
 			return fmt.Errorf("service '%s' not found", svcName)
@@ -163,12 +160,12 @@ func (s *Storage) AddGroup(name string, services []string) error {
 	}
 
 	data.Groups[name] = services
-	return s.SaveData(data)
+	return s.writeStorage(data)
 }
 
-// DeleteGroup deletes a group
+// حذف گروه
 func (s *Storage) DeleteGroup(name string) error {
-	data, err := s.LoadData()
+	data, err := s.readStorage()
 	if err != nil {
 		return err
 	}
@@ -178,12 +175,12 @@ func (s *Storage) DeleteGroup(name string) error {
 	}
 
 	delete(data.Groups, name)
-	return s.SaveData(data)
+	return s.writeStorage(data)
 }
 
-// GetGroup retrieves a group's services
-func (s *Storage) GetGroup(name string) ([]string, error) {
-	data, err := s.LoadData()
+// دریافت سرویس‌های یک گروه
+func (s *Storage) GetGroupServices(name string) ([]string, error) {
+	data, err := s.readStorage()
 	if err != nil {
 		return nil, err
 	}
@@ -196,18 +193,18 @@ func (s *Storage) GetGroup(name string) ([]string, error) {
 	return services, nil
 }
 
-// ListGroups returns all groups sorted by name
+// دریافت لیست گروه‌ها
 func (s *Storage) ListGroups() (map[string][]string, error) {
-	data, err := s.LoadData()
+	data, err := s.readStorage()
 	if err != nil {
 		return nil, err
 	}
 	return data.Groups, nil
 }
 
-// GetAllServiceNames returns all service names (for "all" command)
-func (s *Storage) GetAllServiceNames() ([]string, error) {
-	data, err := s.LoadData()
+// دریافت نام تمام سرویس‌ها برای حالت all
+func (s *Storage) ListServiceNames() ([]string, error) {
+	data, err := s.readStorage()
 	if err != nil {
 		return nil, err
 	}
@@ -220,9 +217,9 @@ func (s *Storage) GetAllServiceNames() ([]string, error) {
 	return names, nil
 }
 
-// CheckNameConflict checks if a name exists as both service and group
-func (s *Storage) CheckNameConflict(name string) (hasConflict bool, err error) {
-	data, err := s.LoadData()
+// بررسی تداخل نام بین سرویس و گروه
+func (s *Storage) HasNameConflict(name string) (bool, error) {
+	data, err := s.readStorage()
 	if err != nil {
 		return false, err
 	}
@@ -233,29 +230,27 @@ func (s *Storage) CheckNameConflict(name string) (hasConflict bool, err error) {
 	return isService && isGroup, nil
 }
 
-// PortConflict represents a port conflict between services
+// ساختار گزارش تداخل پورت
 type PortConflict struct {
 	Port     string
 	Services []string
 }
 
-// CheckPortConflicts checks for port conflicts among given service names
-func (s *Storage) CheckPortConflicts(serviceNames []string) ([]PortConflict, error) {
-	data, err := s.LoadData()
+// بررسی تداخل پورت بین سرویس‌ها
+func (s *Storage) FindPortConflicts(serviceNames []string) ([]PortConflict, error) {
+	data, err := s.readStorage()
 	if err != nil {
 		return nil, err
 	}
 
-	// Map of port -> service names
 	portMap := make(map[string][]string)
-
 	for _, name := range serviceNames {
 		command, exists := data.Services[name]
 		if !exists {
 			continue
 		}
 
-		localPort, _ := ExtractPorts(command)
+		localPort, _ := parsePortsFromCommand(command)
 		if localPort == "" {
 			continue
 		}
@@ -263,11 +258,9 @@ func (s *Storage) CheckPortConflicts(serviceNames []string) ([]PortConflict, err
 		portMap[localPort] = append(portMap[localPort], name)
 	}
 
-	// Find conflicts (ports used by more than one service)
 	conflicts := make([]PortConflict, 0)
 	for port, services := range portMap {
 		if len(services) > 1 {
-			// Sort services for consistent display
 			sort.Strings(services)
 			conflicts = append(conflicts, PortConflict{
 				Port:     port,
@@ -276,7 +269,6 @@ func (s *Storage) CheckPortConflicts(serviceNames []string) ([]PortConflict, err
 		}
 	}
 
-	// Sort conflicts by port number for consistent display
 	sort.Slice(conflicts, func(i, j int) bool {
 		return conflicts[i].Port < conflicts[j].Port
 	})
