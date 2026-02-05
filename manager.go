@@ -329,9 +329,6 @@ func (m *ServiceManager) runServiceOnce(ctx context.Context, svc *Service) {
 	if err != nil && ctx.Err() == nil {
 		message := fmt.Sprintf("Process died: %v", err)
 		svc.setError(message)
-		if isStderrLoggingEnabled() {
-			fmt.Fprintf(os.Stderr, "[%s] ERROR: Process died: %v\n", svc.Name, err)
-		}
 	}
 }
 

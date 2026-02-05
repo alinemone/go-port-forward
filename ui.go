@@ -14,6 +14,17 @@ import (
 
 type tickMsg time.Time
 
+// تعریف پالت رنگی برای UI
+var (
+	colorText      = lipgloss.Color("#E6E6E6")
+	colorMuted     = lipgloss.Color("#8A94A6")
+	colorBorder    = lipgloss.Color("#2E3A4A")
+	colorAccent    = lipgloss.Color("#4DD4FF")
+	colorAccentAlt = lipgloss.Color("#6FFFB0")
+	colorWarn      = lipgloss.Color("#FFE66D")
+	colorError     = lipgloss.Color("#FF6B6B")
+)
+
 // مدل اصلی UI
 type UI struct {
 	manager       *ServiceManager
@@ -156,7 +167,7 @@ func (u *UI) View() string {
 	}
 	logBox := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#6FFFB0")).
+		BorderForeground(colorAccentAlt).
 		Width(logBoxWidth).
 		Render(u.viewport.View())
 	sections = append(sections, logBox)
@@ -299,7 +310,7 @@ func calculateViewportHeight(serviceCount, totalHeight int) int {
 // نمایش حالت بدون سرویس
 func renderEmptyState() string {
 	emptyStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#808080")).
+		Foreground(colorMuted).
 		Italic(true)
 	return emptyStyle.Render("⚬ No services running...")
 }
@@ -310,6 +321,11 @@ func renderServiceTable(services []Service, selectedIndex int, width int) string
 		width = 60
 	}
 
+	compact := width < 90
+	statusWidth := 12
+	uptimeWidth := 8
+	portWidth := 6
+	restartWidth := 8
 	maxNameLen := 7
 	for i := range services {
 		nameLen := len(services[i].Name)
@@ -321,12 +337,55 @@ func renderServiceTable(services []Service, selectedIndex int, width int) string
 		maxNameLen = 30
 	}
 
+	// تنظیم عرض‌ها بر اساس فضای موجود برای هم‌ترازی بهتر
+	available := width - 2
+	if available < 60 {
+		available = 60
+	}
+	if compact {
+		minName := 8
+		fixed := statusWidth + portWidth + 6
+		nameWidth := available - fixed
+		if nameWidth < minName {
+			nameWidth = minName
+		}
+		if nameWidth > maxNameLen {
+			nameWidth = maxNameLen
+		}
+		maxNameLen = nameWidth
+	} else {
+		minName := 10
+		fixed := statusWidth + uptimeWidth + portWidth + restartWidth + 10
+		nameWidth := available - fixed
+		if nameWidth < minName {
+			nameWidth = minName
+		}
+		if nameWidth > maxNameLen {
+			nameWidth = maxNameLen
+		}
+		maxNameLen = nameWidth
+	}
+
 	rows := make([]string, 0, len(services)+2)
-	headerName := fmt.Sprintf("%-*s", maxNameLen, "SERVICE")
+	headerLine := fmt.Sprintf(
+		"%-*s  %-*s",
+		maxNameLen, "SERVICE",
+		statusWidth, "STATUS",
+	)
+	if compact {
+		headerLine += fmt.Sprintf("  %-*s", portWidth, "PORT")
+	} else {
+		headerLine += fmt.Sprintf(
+			"  %-*s  %-*s  %-*s",
+			uptimeWidth, "UPTIME",
+			portWidth, "PORT",
+			restartWidth, "RESTARTS",
+		)
+	}
 	header := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#FFFFFF")).
+		Foreground(colorText).
 		Bold(true).
-		Render(headerName + "  STATUS       UPTIME   PORT   RESTARTS")
+		Render(headerLine)
 	rows = append(rows, header)
 
 	sepWidth := width - 6
@@ -350,15 +409,15 @@ func renderServiceTable(services []Service, selectedIndex int, width int) string
 
 		switch svc.Status {
 		case StatusHealthy:
-			statusColor = lipgloss.Color("#6FFFB0")
+			statusColor = colorAccentAlt
 			statusIcon = "●"
 			statusText = "HEALTHY"
 		case StatusConnecting:
-			statusColor = lipgloss.Color("#FFE66D")
+			statusColor = colorWarn
 			statusIcon = "◐"
 			statusText = "CONNECTING"
 		case StatusError:
-			statusColor = lipgloss.Color("#FF6B6B")
+			statusColor = colorError
 			statusIcon = "✗"
 			statusText = "ERROR"
 		}
@@ -370,13 +429,13 @@ func renderServiceTable(services []Service, selectedIndex int, width int) string
 			displayName = displayName[:maxNameLen-3] + "..."
 		}
 		name := fmt.Sprintf("%-*s", maxNameLen, displayName)
-		status := fmt.Sprintf("%s %-10s", statusIcon, statusText)
-		uptimeStr := fmt.Sprintf("%-8s", uptime)
-		portStr := fmt.Sprintf("%-6s", svc.LocalPort)
-		restarts := fmt.Sprintf("%d", svc.RestartCount)
+		status := fmt.Sprintf("%s %-*s", statusIcon, statusWidth-2, statusText)
+		uptimeStr := fmt.Sprintf("%-*s", uptimeWidth, uptime)
+		portStr := fmt.Sprintf("%-*s", portWidth, svc.LocalPort)
+		restarts := fmt.Sprintf("%-*d", restartWidth, svc.RestartCount)
 
 		styledName := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#E0E0E0")).
+			Foreground(colorText).
 			Bold(true).
 			Render(name)
 
@@ -385,25 +444,30 @@ func renderServiceTable(services []Service, selectedIndex int, width int) string
 			Render(status)
 
 		styledUptime := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#C0C0C0")).
+			Foreground(colorMuted).
 			Render(uptimeStr)
 
 		styledRestarts := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#C0C0C0")).
+			Foreground(colorMuted).
 			Render(restarts)
 
 		styledPort := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#C0C0C0")).
+			Foreground(colorMuted).
 			Render(portStr)
 
-		row := highlight + styledName + "  " + styledStatus + " " + styledUptime + " " + styledPort + " " + styledRestarts
+		row := highlight + styledName + "  " + styledStatus
+		if compact {
+			row += "  " + styledPort
+		} else {
+			row += "  " + styledUptime + "  " + styledPort + "  " + styledRestarts
+		}
 		rows = append(rows, row)
 	}
 
 	table := lipgloss.JoinVertical(lipgloss.Left, rows...)
 	style := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#4A90E2")).
+		BorderForeground(colorBorder).
 		Padding(0, 1).
 		Width(width - 2)
 
@@ -455,7 +519,7 @@ func renderLogsContent(services []Service, maxWidth int) string {
 
 	if len(allLogs) == 0 {
 		content.WriteString(lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#808080")).
+			Foreground(colorMuted).
 			Italic(true).
 			Render("No logs yet..."))
 		return content.String()
@@ -476,11 +540,11 @@ func renderLogsContent(services []Service, maxWidth int) string {
 		namePlain := padRightRunes(serviceName, nameWidth)
 
 		message := log.Entry.Message
-		msgColor := lipgloss.Color("#E0E0E0")
+		msgColor := colorText
 		if log.Entry.IsError {
-			msgColor = lipgloss.Color("#FF6B6B")
+			msgColor = colorError
 		} else if strings.Contains(message, "━━━━") {
-			msgColor = lipgloss.Color("#FFE66D")
+			msgColor = colorWarn
 		}
 
 		prefixWidth := nameWidth + 12
@@ -492,12 +556,12 @@ func renderLogsContent(services []Service, maxWidth int) string {
 		wrappedLines := wrapText(message, availableWidth)
 
 		nameStyled := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#4DD4FF")).
+			Foreground(colorAccent).
 			Bold(true).
 			Render(namePlain)
 
 		timeStyled := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#808080")).
+			Foreground(colorMuted).
 			Render(timestamp)
 
 		if len(wrappedLines) > 0 {
@@ -638,7 +702,7 @@ func (u *UI) renderAddServiceOverlay() string {
 	rows := make([]string, 0, len(u.addCandidates)+2)
 	headerName := fmt.Sprintf("%-*s", maxNameLen, "SERVICE")
 	header := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#FFFFFF")).
+		Foreground(colorText).
 		Bold(true).
 		Render(headerName + "  SELECT")
 	rows = append(rows, header)
@@ -672,12 +736,12 @@ func (u *UI) renderAddServiceOverlay() string {
 		selectStr := fmt.Sprintf("%-7s", checkbox)
 
 		styledName := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#E0E0E0")).
+			Foreground(colorText).
 			Bold(true).
 			Render(name)
 
 		styledSelect := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#C0C0C0")).
+			Foreground(colorMuted).
 			Render(selectStr)
 
 		row := highlight + styledName + "  " + styledSelect
@@ -687,7 +751,7 @@ func (u *UI) renderAddServiceOverlay() string {
 	table := lipgloss.JoinVertical(lipgloss.Left, rows...)
 	style := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#4A90E2")).
+		BorderForeground(colorBorder).
 		Padding(0, 1).
 		Width(width - 2)
 
@@ -695,7 +759,7 @@ func (u *UI) renderAddServiceOverlay() string {
 
 	instructions := "↑↓:navigate • Space:toggle selection • Enter:add selected • Esc:cancel"
 	instructionStyled := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#808080")).
+		Foreground(colorMuted).
 		Render(instructions)
 
 	return lipgloss.JoinVertical(lipgloss.Left, overlayBox, instructionStyled)
@@ -707,13 +771,17 @@ func renderHelp(width int) string {
 		width = 60
 	}
 
+	helpText := "↑↓/j/k: move  •  a: add  •  r: restart  •  s: stop  •  q/esc: quit"
+	if width < 90 {
+		helpText = "↑↓: move  •  a:add  •  r:restart  •  s:stop  •  q:quit"
+	}
 	help := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#808080")).
-		Render("↑↓:navigate/scroll • r:restart • s:stop • a:add • q:quit")
+		Foreground(colorMuted).
+		Render(helpText)
 
 	style := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#4DD4FF")).
+		BorderForeground(colorBorder).
 		Padding(0, 1).
 		Width(width - 2)
 
@@ -723,12 +791,12 @@ func renderHelp(width int) string {
 // نمایش پیام خروج امن
 func renderShutdownScreen() string {
 	shutdownStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#6FFFB0")).
+		Foreground(colorAccentAlt).
 		Bold(true)
 
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#6FFFB0")).
+		BorderForeground(colorAccentAlt).
 		Padding(1, 4).
 		Align(lipgloss.Center)
 
