@@ -367,7 +367,8 @@ func renderServiceTable(services []Service, selectedIndex int, width int) string
 	}
 
 	rows := make([]string, 0, len(services)+2)
-	headerLine := fmt.Sprintf(
+	headerPrefix := "  "
+	headerLine := headerPrefix + fmt.Sprintf(
 		"%-*s  %-*s",
 		maxNameLen, "SERVICE",
 		statusWidth, "STATUS",
@@ -452,7 +453,7 @@ func renderServiceTable(services []Service, selectedIndex int, width int) string
 			Render(restarts)
 
 		styledPort := lipgloss.NewStyle().
-			Foreground(colorMuted).
+			Foreground(colorText).
 			Render(portStr)
 
 		row := highlight + styledName + "  " + styledStatus
