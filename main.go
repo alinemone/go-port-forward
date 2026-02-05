@@ -32,6 +32,8 @@ func main() {
 		runListCommand()
 	case "r", "run":
 		runStartCommand(args)
+	case "ra":
+		runStartCommand([]string{"all"})
 	case "d", "delete", "rm":
 		runDeleteCommand(args)
 	case "c", "cleanup":
@@ -443,10 +445,10 @@ Usage:
   pf <command> [arguments]
 
 Commands:
-  a, add <name> <command>      Add new service
+  a, add <name> "<command>"    Add new service
   l, list                      List all services
   r, run <name1,name2,...>     Run services with TUI
-  r, run all                   Run all services
+  ra, run all                  Run all services
   r, run <group-name>          Run a group of services
   d, delete <name>             Delete service
   g, group <subcommand>        Manage groups (add/list/delete)
