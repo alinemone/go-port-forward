@@ -38,6 +38,13 @@ jobs:
           BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           LDFLAGS="-s -w -X main.Version=${VERSION} -X main.Commit=${COMMIT} -X main.BuildDate=${BUILD_DATE}"
 
+          if [ -f assets/app.ico ]; then
+            echo "Embedding Windows icon from assets/app.ico"
+            go run github.com/akavel/rsrc@latest -ico assets/app.ico -arch amd64 -o rsrc_windows_amd64.syso
+          else
+            echo "assets/app.ico not found. Building Windows binary without custom icon."
+          fi
+
           # Windows AMD64
           GOOS=windows GOARCH=amd64 go build -ldflags="${LDFLAGS}" -o pf-windows-amd64.exe
 
@@ -52,6 +59,8 @@ jobs:
 
           # macOS Apple Silicon
           GOOS=darwin GOARCH=arm64 go build -ldflags="${LDFLAGS}" -o pf-darwin-arm64
+
+          rm -f rsrc_windows_amd64.syso
 
       - name: Sign Windows binary (optional)
         env:
