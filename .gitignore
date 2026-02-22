@@ -10,3 +10,4 @@ services.json
 pf
 pf-*
 dist/
+*.syso
