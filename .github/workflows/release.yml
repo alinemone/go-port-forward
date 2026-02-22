@@ -53,18 +53,19 @@ jobs:
           # macOS Apple Silicon
           GOOS=darwin GOARCH=arm64 go build -ldflags="${LDFLAGS}" -o pf-darwin-arm64
 
-      - name: Install signing tools
-        if: ${{ secrets.WINDOWS_P12_BASE64 != '' && secrets.WINDOWS_P12_PASSWORD != '' }}
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y osslsigncode
-
       - name: Sign Windows binary (optional)
-        if: ${{ secrets.WINDOWS_P12_BASE64 != '' && secrets.WINDOWS_P12_PASSWORD != '' }}
         env:
           WINDOWS_P12_BASE64: ${{ secrets.WINDOWS_P12_BASE64 }}
           WINDOWS_P12_PASSWORD: ${{ secrets.WINDOWS_P12_PASSWORD }}
         run: |
+          if [ -z "$WINDOWS_P12_BASE64" ] || [ -z "$WINDOWS_P12_PASSWORD" ]; then
+            echo "Signing secrets not configured. Skipping Windows signing."
+            exit 0
+          fi
+
+          sudo apt-get update
+          sudo apt-get install -y osslsigncode
+
           echo "$WINDOWS_P12_BASE64" | base64 -d > windows-signing-cert.p12
           osslsigncode sign \
             -pkcs12 windows-signing-cert.p12 \
