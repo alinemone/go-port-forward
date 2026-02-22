@@ -89,6 +89,22 @@ go build -trimpath -buildvcs=false -ldflags="-s -w -X main.Version=dev -X main.C
 # Optional: Move to a directory in PATH
 ```
 
+#### Windows EXE Icon (release build)
+
+To embed a custom icon into `pf-windows-amd64.exe`:
+
+1. Put your icon at `assets/app.ico`
+2. Install rsrc once:
+   ```bash
+   go install github.com/akavel/rsrc@latest
+   ```
+3. Run release build script:
+   ```powershell
+   ./scripts/build-release.ps1 -Version vX.Y.Z
+   ```
+
+If `assets/app.ico` does not exist, build works normally without a custom icon.
+
 #### Linux/macOS
 ```bash
 go build -trimpath -buildvcs=false -ldflags="-s -w -X main.Version=dev -X main.Commit=local -X main.BuildDate=local" -o pf
