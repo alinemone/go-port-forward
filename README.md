@@ -139,6 +139,9 @@ pf add db "kubectl port-forward service/postgres 5432:5432"
 # Run the service
 pf run db
 
+# Run any kubectl command with auto certificate injection
+pf k get pods -n production
+
 # List all services
 pf list
 ```
@@ -149,6 +152,7 @@ pf list
 |---------|-------|-------------|
 | `add`   | `a`   | Add new service |
 | `list`  | `l`   | List all services |
+| `kubectl` | `k` | Run any kubectl command with configured certificate |
 | `run`   | `r`   | Run services with TUI |
 | `delete`| `d`   | Delete service |
 | `cleanup`| `c`  | Kill all kubectl/ssh processes |
@@ -174,7 +178,7 @@ pf cert remove
 **How it works:**
 - Extracts certificate and private key from P12 file
 - Stores them securely in `~/.pf/certs/`
-- Automatically injects `--client-certificate` and `--client-key` flags into kubectl commands
+- Automatically injects `--client-certificate` and `--client-key` flags into kubectl service commands and `pf k ...` / `pf kubectl ...`
 - Password is only required during setup (not stored)
 
 ## 💡 Usage Examples
@@ -311,7 +315,7 @@ go build -trimpath -buildvcs=false -ldflags="-s -w -X main.Version=dev -X main.C
 ### Cross-Platform Build
 ```bash
 # Windows
-GOOS=windows GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags="-s -w -X main.Version=dev -X main.Commit=local -X main.BuildDate=local" -o pf.exe
+GOOS=windows GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags="-s -w -X main.Version=dev -X main.Commit=local -X main.BuildDate=local" -o pf1.exe
 
 # Linux amd64
 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags="-s -w -X main.Version=dev -X main.Commit=local -X main.BuildDate=local" -o pf-linux-amd64
