@@ -112,6 +112,24 @@ sudo mv pf /usr/local/bin/
 sudo chmod +x /usr/local/bin/pf
 ```
 
+#### Build All Targets Locally
+```bash
+# Windows amd64
+GOOS=windows GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags="-s -w -X main.Version=dev -X main.Commit=local -X main.BuildDate=local" -o pf-windows-amd64.exe
+
+# Linux amd64
+GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags="-s -w -X main.Version=dev -X main.Commit=local -X main.BuildDate=local" -o pf-linux-amd64
+
+# Linux arm64
+GOOS=linux GOARCH=arm64 go build -trimpath -buildvcs=false -ldflags="-s -w -X main.Version=dev -X main.Commit=local -X main.BuildDate=local" -o pf-linux-arm64
+
+# macOS amd64 (Intel)
+GOOS=darwin GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags="-s -w -X main.Version=dev -X main.Commit=local -X main.BuildDate=local" -o pf-darwin-amd64
+
+# macOS arm64 (Apple Silicon)
+GOOS=darwin GOARCH=arm64 go build -trimpath -buildvcs=false -ldflags="-s -w -X main.Version=dev -X main.Commit=local -X main.BuildDate=local" -o pf-darwin-arm64
+```
+
 ## 🚀 Quick Start
 
 ```bash
@@ -295,11 +313,17 @@ go build -trimpath -buildvcs=false -ldflags="-s -w -X main.Version=dev -X main.C
 # Windows
 GOOS=windows GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags="-s -w -X main.Version=dev -X main.Commit=local -X main.BuildDate=local" -o pf.exe
 
-# Linux
-GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags="-s -w -X main.Version=dev -X main.Commit=local -X main.BuildDate=local" -o pf
+# Linux amd64
+GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags="-s -w -X main.Version=dev -X main.Commit=local -X main.BuildDate=local" -o pf-linux-amd64
 
-# macOS
-GOOS=darwin GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags="-s -w -X main.Version=dev -X main.Commit=local -X main.BuildDate=local" -o pf
+# Linux arm64
+GOOS=linux GOARCH=arm64 go build -trimpath -buildvcs=false -ldflags="-s -w -X main.Version=dev -X main.Commit=local -X main.BuildDate=local" -o pf-linux-arm64
+
+# macOS amd64
+GOOS=darwin GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags="-s -w -X main.Version=dev -X main.Commit=local -X main.BuildDate=local" -o pf-darwin-amd64
+
+# macOS arm64
+GOOS=darwin GOARCH=arm64 go build -trimpath -buildvcs=false -ldflags="-s -w -X main.Version=dev -X main.Commit=local -X main.BuildDate=local" -o pf-darwin-arm64
 ```
 
 ### Local Release Script (No Paid Signing)
