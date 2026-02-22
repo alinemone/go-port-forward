@@ -30,6 +30,8 @@ func main() {
 		runAddCommand(args)
 	case "l", "list":
 		runListCommand()
+	case "k", "kubectl":
+		runKubectlCommand(args)
 	case "r", "run":
 		runStartCommand(args)
 	case "ra":
@@ -223,6 +225,51 @@ func runCleanupCommand() {
 
 	fmt.Println("✓ Cleanup complete")
 	fmt.Println("Note: This kills ALL kubectl and ssh processes")
+}
+
+// اجرای مستقیم kubectl با تزریق خودکار cert/key در صورت وجود
+func runKubectlCommand(args []string) {
+	if len(args) < 1 {
+		fmt.Println("Usage: pf kubectl <kubectl-args...>")
+		fmt.Println("Alias: pf k <kubectl-args...>")
+		fmt.Println("Example: pf k get pods -n production")
+		os.Exit(1)
+	}
+
+	finalArgs := append([]string{}, args...)
+
+	certMgr, err := cert.NewManager()
+	if err == nil {
+		if certConfig, exists := certMgr.GetCertificate(); exists && !hasKubectlClientCertArgs(finalArgs) {
+			certArgs := []string{
+				"--client-certificate=" + certConfig.CertPath,
+				"--client-key=" + certConfig.KeyPath,
+			}
+			finalArgs = append(certArgs, finalArgs...)
+		}
+	}
+
+	cmd := exec.Command("kubectl", finalArgs...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			os.Exit(exitErr.ExitCode())
+		}
+		fmt.Printf("Error: failed to run kubectl: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func hasKubectlClientCertArgs(args []string) bool {
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "--client-certificate") || strings.HasPrefix(arg, "--client-key") {
+			return true
+		}
+	}
+	return false
 }
 
 // مدیریت فرمان‌های گروه‌ها
@@ -449,6 +496,7 @@ Usage:
 Commands:
   a, add <name> "<command>"    Add new service
   l, list                      List all services
+  k, kubectl <args...>         Run kubectl with configured certificate
   r, run <name1,name2,...>     Run services with TUI
   ra, run all                  Run all services
   r, run <group-name>          Run a group of services
@@ -461,6 +509,10 @@ Commands:
 
 Examples:
   pf add db "kubectl port-forward service/postgres 5432:5432"
+  pf k get pods -n production
+  pf kubectl logs deploy/api -f
+  pf k exec -it pod/my-pod -- sh
+  pf k describe pod my-pod -n production
   pf run db
   pf run db,redis
   pf run all
@@ -476,6 +528,10 @@ Certificate Management:
   pf cert add <p12-file>      Add certificate (used for all kubectl services)
   pf cert list                Show configured certificate
   pf cert remove              Remove certificate
+
+Kubectl Passthrough:
+  pf k <kubectl-args...>      Run any kubectl command with auto cert injection
+  pf kubectl <args...>        Same as pf k
 
 Features:
   • Simple TUI with real-time status
