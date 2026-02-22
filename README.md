@@ -1,4 +1,4 @@
-# pf - Port Forward Manager v2.1
+# pf - Port Forward Manager v2.*
 
 Modern CLI tool for managing multiple port-forward connections with real-time monitoring and certificate support.
 
@@ -85,13 +85,13 @@ Modern CLI tool for managing multiple port-forward connections with real-time mo
 
 #### Windows
 ```bash
-go build -o pf.exe
+go build -trimpath -buildvcs=false -ldflags="-s -w -X main.Version=dev -X main.Commit=local -X main.BuildDate=local" -o pf.exe
 # Optional: Move to a directory in PATH
 ```
 
 #### Linux/macOS
 ```bash
-go build -o pf
+go build -trimpath -buildvcs=false -ldflags="-s -w -X main.Version=dev -X main.Commit=local -X main.BuildDate=local" -o pf
 sudo mv pf /usr/local/bin/
 sudo chmod +x /usr/local/bin/pf
 ```
@@ -119,6 +119,7 @@ pf list
 | `delete`| `d`   | Delete service |
 | `cleanup`| `c`  | Kill all kubectl/ssh processes |
 | `cert`  |       | Manage certificates (add/list/remove) |
+| `version`  | `v`  | Show build version details |
 | `help`  | `h`   | Show help |
 
 ## 🔐 Certificate Management
@@ -237,7 +238,10 @@ services.json             → Stored services (same directory as executable)
 This tool executes system commands (kubectl, ssh) and manages network connections, which may trigger antivirus false positives.
 
 **Recommendations:**
-- Build from source to verify the code
+- Build from source (or trusted CI artifacts) and verify checksums
+- Use reproducible build flags: `-trimpath -buildvcs=false -ldflags="-s -w"`
+- Avoid packers/obfuscators like UPX
+- Submit false-positive reports to your antivirus vendor
 - Add exception in antivirus software if needed
 - Code is open source - audit anytime
 
@@ -267,20 +271,26 @@ Run `pf cleanup` to kill all kubectl/ssh processes.
 
 ### Build
 ```bash
-go build -o pf
+go build -trimpath -buildvcs=false -ldflags="-s -w -X main.Version=dev -X main.Commit=local -X main.BuildDate=local" -o pf
 ```
 
 ### Cross-Platform Build
 ```bash
 # Windows
-GOOS=windows GOARCH=amd64 go build -o pf.exe
+GOOS=windows GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags="-s -w -X main.Version=dev -X main.Commit=local -X main.BuildDate=local" -o pf.exe
 
 # Linux
-GOOS=linux GOARCH=amd64 go build -o pf
+GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags="-s -w -X main.Version=dev -X main.Commit=local -X main.BuildDate=local" -o pf
 
 # macOS
-GOOS=darwin GOARCH=amd64 go build -o pf
+GOOS=darwin GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags="-s -w -X main.Version=dev -X main.Commit=local -X main.BuildDate=local" -o pf
 ```
+
+### Local Release Script (No Paid Signing)
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build-release.ps1 -Version v2.1.0
+```
+This generates all release binaries in `dist/` and creates `dist/SHA256SUMS.txt`.
 
 ## 🤝 Contributing
 

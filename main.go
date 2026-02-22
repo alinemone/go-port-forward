@@ -44,6 +44,8 @@ func main() {
 		runCertCommand(args)
 	case "h", "help":
 		showUsage()
+	case "v", "version":
+		runVersionCommand()
 	default:
 		fmt.Printf("Unknown command: %s\n", cmd)
 		fmt.Println("Run 'pf help' for usage")
@@ -454,6 +456,7 @@ Commands:
   g, group <subcommand>        Manage groups (add/list/delete)
   c, cleanup                   Kill all kubectl/ssh processes
   cert <subcommand>            Manage certificate (add/list/remove)
+  v, version                   Show build version details
   h, help                      Show this help
 
 Examples:
@@ -484,6 +487,12 @@ Features:
   • Clean shutdown on quit
 `
 	fmt.Println(help)
+}
+
+func runVersionCommand() {
+	fmt.Printf("pf %s\n", Version)
+	fmt.Printf("commit: %s\n", Commit)
+	fmt.Printf("built: %s\n", BuildDate)
 }
 
 // تعیین سرویس‌هایی که باید اجرا شوند (تک، چندتایی، گروه یا همه)
