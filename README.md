@@ -83,10 +83,9 @@ Modern CLI tool for managing multiple port-forward connections with real-time mo
 
 ### From Source
 
-#### Windows
-```bash
-PKG=github.com/alinemone/go-port-forward/internal/version
-go build -trimpath -buildvcs=false -ldflags="-s -w -X $PKG.Version=dev -X $PKG.Commit=local -X $PKG.BuildDate=local" -o pf.exe ./cmd/pf
+#### Windows (PowerShell)
+```powershell
+go build -trimpath -buildvcs=false -ldflags="-s -w -X github.com/alinemone/go-port-forward/internal/version.Version=dev -X github.com/alinemone/go-port-forward/internal/version.Commit=local -X github.com/alinemone/go-port-forward/internal/version.BuildDate=local" -o pf.exe ./cmd/pf
 # Optional: Move to a directory in PATH
 ```
 
@@ -108,16 +107,14 @@ If `assets/app.ico` does not exist, build works normally without a custom icon.
 
 #### Linux/macOS
 ```bash
-PKG=github.com/alinemone/go-port-forward/internal/version
-go build -trimpath -buildvcs=false -ldflags="-s -w -X $PKG.Version=dev -X $PKG.Commit=local -X $PKG.BuildDate=local" -o pf ./cmd/pf
+go build -trimpath -buildvcs=false -ldflags="-s -w -X github.com/alinemone/go-port-forward/internal/version.Version=dev -X github.com/alinemone/go-port-forward/internal/version.Commit=local -X github.com/alinemone/go-port-forward/internal/version.BuildDate=local" -o pf ./cmd/pf
 sudo mv pf /usr/local/bin/
 sudo chmod +x /usr/local/bin/pf
 ```
 
 #### Build All Targets Locally
 ```bash
-PKG=github.com/alinemone/go-port-forward/internal/version
-LDFLAGS="-s -w -X $PKG.Version=dev -X $PKG.Commit=local -X $PKG.BuildDate=local"
+LDFLAGS="-s -w -X github.com/alinemone/go-port-forward/internal/version.Version=dev -X github.com/alinemone/go-port-forward/internal/version.Commit=local -X github.com/alinemone/go-port-forward/internal/version.BuildDate=local"
 
 # Windows amd64
 GOOS=windows GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags="$LDFLAGS" -o pf-windows-amd64.exe ./cmd/pf
@@ -323,14 +320,12 @@ Run `pf cleanup` to kill all kubectl/ssh processes.
 
 ### Build
 ```bash
-PKG=github.com/alinemone/go-port-forward/internal/version
-go build -trimpath -buildvcs=false -ldflags="-s -w -X $PKG.Version=dev -X $PKG.Commit=local -X $PKG.BuildDate=local" -o pf ./cmd/pf
+go build -trimpath -buildvcs=false -ldflags="-s -w -X github.com/alinemone/go-port-forward/internal/version.Version=dev -X github.com/alinemone/go-port-forward/internal/version.Commit=local -X github.com/alinemone/go-port-forward/internal/version.BuildDate=local" -o pf ./cmd/pf
 ```
 
 ### Cross-Platform Build
 ```bash
-PKG=github.com/alinemone/go-port-forward/internal/version
-LDFLAGS="-s -w -X $PKG.Version=dev -X $PKG.Commit=local -X $PKG.BuildDate=local"
+LDFLAGS="-s -w -X github.com/alinemone/go-port-forward/internal/version.Version=dev -X github.com/alinemone/go-port-forward/internal/version.Commit=local -X github.com/alinemone/go-port-forward/internal/version.BuildDate=local"
 
 # Windows
 GOOS=windows GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags="$LDFLAGS" -o pf1.exe ./cmd/pf
