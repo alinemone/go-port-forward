@@ -85,7 +85,8 @@ Modern CLI tool for managing multiple port-forward connections with real-time mo
 
 #### Windows
 ```bash
-go build -trimpath -buildvcs=false -ldflags="-s -w -X main.Version=dev -X main.Commit=local -X main.BuildDate=local" -o pf.exe
+PKG=github.com/alinemone/go-port-forward/internal/version
+go build -trimpath -buildvcs=false -ldflags="-s -w -X $PKG.Version=dev -X $PKG.Commit=local -X $PKG.BuildDate=local" -o pf.exe ./cmd/pf
 # Optional: Move to a directory in PATH
 ```
 
@@ -107,27 +108,31 @@ If `assets/app.ico` does not exist, build works normally without a custom icon.
 
 #### Linux/macOS
 ```bash
-go build -trimpath -buildvcs=false -ldflags="-s -w -X main.Version=dev -X main.Commit=local -X main.BuildDate=local" -o pf
+PKG=github.com/alinemone/go-port-forward/internal/version
+go build -trimpath -buildvcs=false -ldflags="-s -w -X $PKG.Version=dev -X $PKG.Commit=local -X $PKG.BuildDate=local" -o pf ./cmd/pf
 sudo mv pf /usr/local/bin/
 sudo chmod +x /usr/local/bin/pf
 ```
 
 #### Build All Targets Locally
 ```bash
+PKG=github.com/alinemone/go-port-forward/internal/version
+LDFLAGS="-s -w -X $PKG.Version=dev -X $PKG.Commit=local -X $PKG.BuildDate=local"
+
 # Windows amd64
-GOOS=windows GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags="-s -w -X main.Version=dev -X main.Commit=local -X main.BuildDate=local" -o pf-windows-amd64.exe
+GOOS=windows GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags="$LDFLAGS" -o pf-windows-amd64.exe ./cmd/pf
 
 # Linux amd64
-GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags="-s -w -X main.Version=dev -X main.Commit=local -X main.BuildDate=local" -o pf-linux-amd64
+GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags="$LDFLAGS" -o pf-linux-amd64 ./cmd/pf
 
 # Linux arm64
-GOOS=linux GOARCH=arm64 go build -trimpath -buildvcs=false -ldflags="-s -w -X main.Version=dev -X main.Commit=local -X main.BuildDate=local" -o pf-linux-arm64
+GOOS=linux GOARCH=arm64 go build -trimpath -buildvcs=false -ldflags="$LDFLAGS" -o pf-linux-arm64 ./cmd/pf
 
 # macOS amd64 (Intel)
-GOOS=darwin GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags="-s -w -X main.Version=dev -X main.Commit=local -X main.BuildDate=local" -o pf-darwin-amd64
+GOOS=darwin GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags="$LDFLAGS" -o pf-darwin-amd64 ./cmd/pf
 
 # macOS arm64 (Apple Silicon)
-GOOS=darwin GOARCH=arm64 go build -trimpath -buildvcs=false -ldflags="-s -w -X main.Version=dev -X main.Commit=local -X main.BuildDate=local" -o pf-darwin-arm64
+GOOS=darwin GOARCH=arm64 go build -trimpath -buildvcs=false -ldflags="$LDFLAGS" -o pf-darwin-arm64 ./cmd/pf
 ```
 
 ## 🚀 Quick Start
@@ -248,13 +253,22 @@ services.json             → Stored services (same directory as executable)
 
 ```
 .
-├── main.go          → CLI entry point and commands
-├── manager.go       → Service lifecycle management
-├── storage.go       → Service persistence
-├── ui.go            → Terminal UI (Bubbletea)
-└── cert/
-    ├── p12.go       → P12 certificate extraction
-    └── manager.go   → Certificate management
+├── cmd/pf/
+│   └── main.go              → CLI entry point and commands
+├── internal/
+│   ├── model/service.go     → Service types and status constants
+│   ├── stringutil/normalize.go → Input normalization
+│   ├── version/version.go   → Build version info
+│   ├── storage/storage.go   → Service persistence and groups
+│   ├── manager/
+│   │   ├── manager.go       → Service lifecycle management
+│   │   ├── output.go        → Output classification
+│   │   ├── proc_unix.go     → Unix process groups
+│   │   └── proc_windows.go  → Windows process groups
+│   ├── ui/ui.go             → Terminal UI (Bubbletea)
+│   └── cert/
+│       ├── p12.go           → P12 certificate extraction
+│       └── manager.go       → Certificate management
 ```
 
 ## 🔧 How It Works
@@ -309,25 +323,29 @@ Run `pf cleanup` to kill all kubectl/ssh processes.
 
 ### Build
 ```bash
-go build -trimpath -buildvcs=false -ldflags="-s -w -X main.Version=dev -X main.Commit=local -X main.BuildDate=local" -o pf
+PKG=github.com/alinemone/go-port-forward/internal/version
+go build -trimpath -buildvcs=false -ldflags="-s -w -X $PKG.Version=dev -X $PKG.Commit=local -X $PKG.BuildDate=local" -o pf ./cmd/pf
 ```
 
 ### Cross-Platform Build
 ```bash
+PKG=github.com/alinemone/go-port-forward/internal/version
+LDFLAGS="-s -w -X $PKG.Version=dev -X $PKG.Commit=local -X $PKG.BuildDate=local"
+
 # Windows
-GOOS=windows GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags="-s -w -X main.Version=dev -X main.Commit=local -X main.BuildDate=local" -o pf1.exe
+GOOS=windows GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags="$LDFLAGS" -o pf1.exe ./cmd/pf
 
 # Linux amd64
-GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags="-s -w -X main.Version=dev -X main.Commit=local -X main.BuildDate=local" -o pf-linux-amd64
+GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags="$LDFLAGS" -o pf-linux-amd64 ./cmd/pf
 
 # Linux arm64
-GOOS=linux GOARCH=arm64 go build -trimpath -buildvcs=false -ldflags="-s -w -X main.Version=dev -X main.Commit=local -X main.BuildDate=local" -o pf-linux-arm64
+GOOS=linux GOARCH=arm64 go build -trimpath -buildvcs=false -ldflags="$LDFLAGS" -o pf-linux-arm64 ./cmd/pf
 
 # macOS amd64
-GOOS=darwin GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags="-s -w -X main.Version=dev -X main.Commit=local -X main.BuildDate=local" -o pf-darwin-amd64
+GOOS=darwin GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags="$LDFLAGS" -o pf-darwin-amd64 ./cmd/pf
 
 # macOS arm64
-GOOS=darwin GOARCH=arm64 go build -trimpath -buildvcs=false -ldflags="-s -w -X main.Version=dev -X main.Commit=local -X main.BuildDate=local" -o pf-darwin-arm64
+GOOS=darwin GOARCH=arm64 go build -trimpath -buildvcs=false -ldflags="$LDFLAGS" -o pf-darwin-arm64 ./cmd/pf
 ```
 
 ### Local Release Script (No Paid Signing)

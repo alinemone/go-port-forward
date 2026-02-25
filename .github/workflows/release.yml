@@ -36,7 +36,8 @@ jobs:
           VERSION="${{ steps.get_version.outputs.VERSION }}"
           COMMIT="${GITHUB_SHA}"
           BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          LDFLAGS="-s -w -X main.Version=${VERSION} -X main.Commit=${COMMIT} -X main.BuildDate=${BUILD_DATE}"
+          PKG="github.com/alinemone/go-port-forward/internal/version"
+          LDFLAGS="-s -w -X ${PKG}.Version=${VERSION} -X ${PKG}.Commit=${COMMIT} -X ${PKG}.BuildDate=${BUILD_DATE}"
 
           if [ -f assets/app.ico ]; then
             echo "Embedding Windows icon from assets/app.ico"
@@ -46,19 +47,19 @@ jobs:
           fi
 
           # Windows AMD64
-          GOOS=windows GOARCH=amd64 go build -ldflags="${LDFLAGS}" -o pf-windows-amd64.exe
+          GOOS=windows GOARCH=amd64 go build -ldflags="${LDFLAGS}" -o pf-windows-amd64.exe ./cmd/pf
 
           # Linux AMD64
-          GOOS=linux GOARCH=amd64 go build -ldflags="${LDFLAGS}" -o pf-linux-amd64
+          GOOS=linux GOARCH=amd64 go build -ldflags="${LDFLAGS}" -o pf-linux-amd64 ./cmd/pf
 
           # Linux ARM64
-          GOOS=linux GOARCH=arm64 go build -ldflags="${LDFLAGS}" -o pf-linux-arm64
+          GOOS=linux GOARCH=arm64 go build -ldflags="${LDFLAGS}" -o pf-linux-arm64 ./cmd/pf
 
           # macOS Intel
-          GOOS=darwin GOARCH=amd64 go build -ldflags="${LDFLAGS}" -o pf-darwin-amd64
+          GOOS=darwin GOARCH=amd64 go build -ldflags="${LDFLAGS}" -o pf-darwin-amd64 ./cmd/pf
 
           # macOS Apple Silicon
-          GOOS=darwin GOARCH=arm64 go build -ldflags="${LDFLAGS}" -o pf-darwin-arm64
+          GOOS=darwin GOARCH=arm64 go build -ldflags="${LDFLAGS}" -o pf-darwin-arm64 ./cmd/pf
 
           rm -f rsrc_windows_amd64.syso
 

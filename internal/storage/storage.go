@@ -1,4 +1,4 @@
-package main
+package storage
 
 import (
 	"encoding/json"
@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+
+	"github.com/alinemone/go-port-forward/internal/model"
 )
 
 // ساختار کامل داده‌های ذخیره‌سازی
@@ -133,8 +135,8 @@ func (s *Storage) GetService(name string) (string, error) {
 
 var portRegex = regexp.MustCompile(`(\d+):(\d+)`)
 
-// استخراج پورت‌ها از فرمان اجرا
-func parsePortsFromCommand(command string) (local, remote string) {
+// ParsePortsFromCommand استخراج پورت‌ها از فرمان اجرا
+func ParsePortsFromCommand(command string) (local, remote string) {
 	matches := portRegex.FindStringSubmatch(command)
 	if len(matches) == 3 {
 		return matches[1], matches[2]
@@ -230,14 +232,8 @@ func (s *Storage) HasNameConflict(name string) (bool, error) {
 	return isService && isGroup, nil
 }
 
-// ساختار گزارش تداخل پورت
-type PortConflict struct {
-	Port     string
-	Services []string
-}
-
 // بررسی تداخل پورت بین سرویس‌ها
-func (s *Storage) FindPortConflicts(serviceNames []string) ([]PortConflict, error) {
+func (s *Storage) FindPortConflicts(serviceNames []string) ([]model.PortConflict, error) {
 	data, err := s.readStorage()
 	if err != nil {
 		return nil, err
@@ -250,7 +246,7 @@ func (s *Storage) FindPortConflicts(serviceNames []string) ([]PortConflict, erro
 			continue
 		}
 
-		localPort, _ := parsePortsFromCommand(command)
+		localPort, _ := ParsePortsFromCommand(command)
 		if localPort == "" {
 			continue
 		}
@@ -258,11 +254,11 @@ func (s *Storage) FindPortConflicts(serviceNames []string) ([]PortConflict, erro
 		portMap[localPort] = append(portMap[localPort], name)
 	}
 
-	conflicts := make([]PortConflict, 0)
+	conflicts := make([]model.PortConflict, 0)
 	for port, services := range portMap {
 		if len(services) > 1 {
 			sort.Strings(services)
-			conflicts = append(conflicts, PortConflict{
+			conflicts = append(conflicts, model.PortConflict{
 				Port:     port,
 				Services: services,
 			})

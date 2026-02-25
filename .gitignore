@@ -7,7 +7,7 @@ services.json
 *.exe
 
 ## Build artifacts
-pf
+/pf
 pf-*
 dist/
 *.syso
