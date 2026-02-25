@@ -1,4 +1,4 @@
-package main
+package version
 
 var (
 	// Set via -ldflags during release builds.

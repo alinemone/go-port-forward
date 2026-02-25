@@ -1,4 +1,4 @@
-package main
+package ui
 
 import (
 	"context"
@@ -10,6 +10,11 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/alinemone/go-port-forward/internal/manager"
+	"github.com/alinemone/go-port-forward/internal/model"
+	"github.com/alinemone/go-port-forward/internal/storage"
+	"github.com/alinemone/go-port-forward/internal/stringutil"
 )
 
 type tickMsg time.Time
@@ -27,8 +32,8 @@ var (
 
 // مدل اصلی UI
 type UI struct {
-	manager       *ServiceManager
-	services      []Service
+	manager       *manager.ServiceManager
+	services      []model.Service
 	cursorIndex   int
 	quitting      bool
 	width         int
@@ -44,16 +49,16 @@ type UI struct {
 
 const uiTickInterval = 500 * time.Millisecond
 
-// ساخت مدل UI جدید
-func NewUI(manager *ServiceManager, ctx context.Context) *UI {
+// NewUI ساخت مدل UI جدید
+func NewUI(mgr *manager.ServiceManager, ctx context.Context) *UI {
 	return &UI{
-		manager:  manager,
-		services: []Service{},
+		manager:  mgr,
+		services: []model.Service{},
 		ctx:      ctx,
 	}
 }
 
-// مقداردهی اولیه مدل Bubble Tea
+// Init مقداردهی اولیه مدل Bubble Tea
 func (u *UI) Init() tea.Cmd {
 	return tea.Batch(
 		tickCmd(uiTickInterval),
@@ -61,7 +66,7 @@ func (u *UI) Init() tea.Cmd {
 	)
 }
 
-// مدیریت رویدادها و به‌روزرسانی وضعیت UI
+// Update مدیریت رویدادها و به‌روزرسانی وضعیت UI
 func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
@@ -84,7 +89,7 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		keyRaw := msg.String()
 		key := keyRaw
 		if keyRaw != " " {
-			key = normalizeToken(keyRaw)
+			key = stringutil.NormalizeToken(keyRaw)
 		}
 		if u.addMode {
 			return u.updateAddMode(msg)
@@ -116,6 +121,11 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				u.manager.RestartService(u.ctx, serviceName)
 			}
 
+		case "ctrl+r":
+			if len(u.services) > 0 {
+				u.manager.RestartAllServices(u.ctx)
+			}
+
 		case "s":
 			if u.cursorIndex < len(u.services) && len(u.services) > 0 {
 				u.manager.StopService(u.services[u.cursorIndex].Name)
@@ -138,7 +148,7 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return u, cmd
 }
 
-// رندر رابط کاربری
+// View رندر رابط کاربری
 func (u *UI) View() string {
 	if u.quitting {
 		return renderShutdownScreen()
@@ -178,8 +188,8 @@ func (u *UI) View() string {
 
 // ورود به حالت افزودن سرویس
 func (u *UI) enterAddMode() {
-	storage := NewStorage()
-	allServices, err := storage.ListServiceNames()
+	st := storage.NewStorage()
+	allServices, err := st.ListServiceNames()
 	if err != nil {
 		return
 	}
@@ -214,7 +224,7 @@ func (u *UI) updateAddMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	keyRaw := msg.String()
 	key := keyRaw
 	if keyRaw != " " {
-		key = normalizeToken(keyRaw)
+		key = stringutil.NormalizeToken(keyRaw)
 	}
 	switch key {
 	case "esc":
@@ -251,7 +261,6 @@ func (u *UI) updateAddMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return u, nil
 }
 
-// اطمینان از معتبر بودن موقعیت انتخاب
 func (u *UI) ensureCursorInRange() {
 	if u.cursorIndex >= len(u.services) && len(u.services) > 0 {
 		u.cursorIndex = len(u.services) - 1
@@ -261,7 +270,6 @@ func (u *UI) ensureCursorInRange() {
 	}
 }
 
-// به‌روزرسانی محتوای viewport لاگ‌ها
 func (u *UI) refreshViewportContent() {
 	if !u.ready {
 		return
@@ -278,7 +286,6 @@ func (u *UI) refreshViewportContent() {
 	u.viewport.GotoBottom()
 }
 
-// تنظیم اندازه viewport بر اساس ارتفاع پنجره
 func (u *UI) ensureViewportSize() {
 	if u.width == 0 || u.height == 0 {
 		return
@@ -293,7 +300,6 @@ func (u *UI) ensureViewportSize() {
 	}
 }
 
-// محاسبه ارتفاع مناسب برای viewport
 func calculateViewportHeight(serviceCount, totalHeight int) int {
 	tableLines := 4 + serviceCount
 	if serviceCount == 0 {
@@ -307,7 +313,6 @@ func calculateViewportHeight(serviceCount, totalHeight int) int {
 	return viewportHeight
 }
 
-// نمایش حالت بدون سرویس
 func renderEmptyState() string {
 	emptyStyle := lipgloss.NewStyle().
 		Foreground(colorMuted).
@@ -315,8 +320,7 @@ func renderEmptyState() string {
 	return emptyStyle.Render("⚬ No services running...")
 }
 
-// رندر جدول سرویس‌ها
-func renderServiceTable(services []Service, selectedIndex int, width int) string {
+func renderServiceTable(services []model.Service, selectedIndex int, width int) string {
 	if width < 60 {
 		width = 60
 	}
@@ -337,7 +341,6 @@ func renderServiceTable(services []Service, selectedIndex int, width int) string
 		maxNameLen = 30
 	}
 
-	// تنظیم عرض‌ها بر اساس فضای موجود برای هم‌ترازی بهتر
 	available := width - 2
 	if available < 60 {
 		available = 60
@@ -409,15 +412,15 @@ func renderServiceTable(services []Service, selectedIndex int, width int) string
 		}
 
 		switch svc.Status {
-		case StatusHealthy:
+		case model.StatusHealthy:
 			statusColor = colorAccentAlt
 			statusIcon = "●"
 			statusText = "HEALTHY"
-		case StatusConnecting:
+		case model.StatusConnecting:
 			statusColor = colorWarn
 			statusIcon = "◐"
 			statusText = "CONNECTING"
-		case StatusError:
+		case model.StatusError:
 			statusColor = colorError
 			statusIcon = "✗"
 			statusText = "ERROR"
@@ -475,7 +478,6 @@ func renderServiceTable(services []Service, selectedIndex int, width int) string
 	return style.Render(table)
 }
 
-// قالب‌بندی زمان روشن بودن سرویس
 func formatUptime(startTime time.Time) string {
 	if startTime.IsZero() {
 		return "-"
@@ -494,20 +496,19 @@ func formatUptime(startTime time.Time) string {
 	return fmt.Sprintf("%ds", seconds)
 }
 
-// رندر لاگ‌های ترکیبی برای viewport
-func renderLogsContent(services []Service, maxWidth int) string {
+func renderLogsContent(services []model.Service, maxWidth int) string {
 	var content strings.Builder
 
-	type LogWithService struct {
+	type logWithService struct {
 		ServiceName string
-		Entry       LogEntry
+		Entry       model.LogEntry
 	}
 
-	allLogs := make([]LogWithService, 0)
+	allLogs := make([]logWithService, 0)
 	for i := range services {
 		svc := &services[i]
 		for _, log := range svc.Logs {
-			allLogs = append(allLogs, LogWithService{
+			allLogs = append(allLogs, logWithService{
 				ServiceName: svc.Name,
 				Entry:       log,
 			})
@@ -588,7 +589,6 @@ func renderLogsContent(services []Service, maxWidth int) string {
 	return content.String()
 }
 
-// شکست متن برای رعایت عرض نمایش
 func wrapText(text string, maxWidth int) []string {
 	if maxWidth <= 0 {
 		return []string{text}
@@ -655,7 +655,6 @@ func wrapText(text string, maxWidth int) []string {
 	return lines
 }
 
-// کوتاه‌سازی رشته با سه‌نقطه
 func truncateRunes(text string, max int) string {
 	if max <= 0 {
 		return ""
@@ -670,7 +669,6 @@ func truncateRunes(text string, max int) string {
 	return string(runes[:max-3]) + "..."
 }
 
-// پر کردن فضای خالی برای هم‌ترازی
 func padRightRunes(text string, width int) string {
 	runes := []rune(text)
 	if len(runes) >= width {
@@ -679,7 +677,6 @@ func padRightRunes(text string, width int) string {
 	return text + strings.Repeat(" ", width-len(runes))
 }
 
-// نمایش پنجره افزودن سرویس
 func (u *UI) renderAddServiceOverlay() string {
 	width := u.width
 	if width <= 0 {
@@ -766,15 +763,14 @@ func (u *UI) renderAddServiceOverlay() string {
 	return lipgloss.JoinVertical(lipgloss.Left, overlayBox, instructionStyled)
 }
 
-// نمایش راهنمای کلیدها
 func renderHelp(width int) string {
 	if width < 60 {
 		width = 60
 	}
 
-	helpText := "↑↓/j/k: move  •  a: add  •  r: restart  •  s: stop  •  q/esc: quit"
+	helpText := "↑↓/j/k: move  •  a: add  •  r: restart  •  ctrl+r: restart all  •  s: stop  •  q/esc: quit"
 	if width < 90 {
-		helpText = "↑↓: move  •  a:add  •  r:restart  •  s:stop  •  q:quit"
+		helpText = "↑↓: move  •  a:add  •  r:restart  •  ^r:restart all  •  s:stop  •  q:quit"
 	}
 	help := lipgloss.NewStyle().
 		Foreground(colorMuted).
@@ -789,7 +785,6 @@ func renderHelp(width int) string {
 	return style.Render(help)
 }
 
-// نمایش پیام خروج امن
 func renderShutdownScreen() string {
 	shutdownStyle := lipgloss.NewStyle().
 		Foreground(colorAccentAlt).
@@ -804,7 +799,6 @@ func renderShutdownScreen() string {
 	return box.Render(shutdownStyle.Render("✓ Shutting down gracefully..."))
 }
 
-// ساخت فرمان تیک برای بروزرسانی دوره‌ای
 func tickCmd(interval time.Duration) tea.Cmd {
 	return tea.Tick(interval, func(t time.Time) tea.Msg {
 		return tickMsg(t)

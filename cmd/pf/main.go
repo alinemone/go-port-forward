@@ -11,18 +11,23 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/alinemone/go-port-forward/cert"
+	"github.com/alinemone/go-port-forward/internal/cert"
+	"github.com/alinemone/go-port-forward/internal/manager"
+	"github.com/alinemone/go-port-forward/internal/storage"
+	"github.com/alinemone/go-port-forward/internal/stringutil"
+	"github.com/alinemone/go-port-forward/internal/ui"
+	"github.com/alinemone/go-port-forward/internal/version"
+
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// اجرای برنامه و هدایت به فرمان مناسب
 func main() {
 	if len(os.Args) < 2 {
 		showUsage()
 		return
 	}
 
-	cmd := normalizeToken(os.Args[1])
+	cmd := stringutil.NormalizeToken(os.Args[1])
 	args := os.Args[2:]
 
 	switch cmd {
@@ -55,14 +60,6 @@ func main() {
 	}
 }
 
-// یکسان‌سازی نام فرمان با حذف خط تیره‌های ابتدای آن
-// نرمال‌سازی ورودی‌ها برای مقایسه یکنواخت
-func normalizeToken(value string) string {
-	normalized := strings.TrimLeft(strings.TrimSpace(value), "-")
-	return strings.ToLower(normalized)
-}
-
-// افزودن سرویس جدید به فایل ذخیره‌سازی
 func runAddCommand(args []string) {
 	if len(args) < 2 {
 		fmt.Println("Usage: pf add <name> <command>")
@@ -73,8 +70,8 @@ func runAddCommand(args []string) {
 	name := args[0]
 	command := strings.Join(args[1:], " ")
 
-	storage := NewStorage()
-	if err := storage.AddService(name, command); err != nil {
+	st := storage.NewStorage()
+	if err := st.AddService(name, command); err != nil {
 		fmt.Printf("Error: %v\n", err)
 		os.Exit(1)
 	}
@@ -82,10 +79,9 @@ func runAddCommand(args []string) {
 	fmt.Printf("✓ Service '%s' added\n", name)
 }
 
-// نمایش لیست سرویس‌های ذخیره‌شده
 func runListCommand() {
-	storage := NewStorage()
-	services, err := storage.LoadServices()
+	st := storage.NewStorage()
+	services, err := st.LoadServices()
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		os.Exit(1)
@@ -116,7 +112,6 @@ func runListCommand() {
 	fmt.Println()
 }
 
-// اجرای سرویس‌ها با رابط متنی
 func runStartCommand(args []string) {
 	if len(args) < 1 {
 		fmt.Println("Usage: pf run <name1,name2,...>")
@@ -125,17 +120,15 @@ func runStartCommand(args []string) {
 		os.Exit(1)
 	}
 
-	storage := NewStorage()
-	serviceNames, err := resolveRunTargets(storage, args[0])
+	st := storage.NewStorage()
+	serviceNames, err := resolveRunTargets(st, args[0])
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		os.Exit(1)
 	}
 
-	// ساخت مدیر سرویس‌ها
-	manager := NewServiceManager(storage)
+	mgr := manager.NewServiceManager(st)
 
-	// مدیریت سیگنال‌ها برای خروج تمیز
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -146,16 +139,14 @@ func runStartCommand(args []string) {
 		cancel()
 	}()
 
-	// بررسی وجود همه سرویس‌ها
 	for _, name := range serviceNames {
-		if _, err := storage.GetService(name); err != nil {
+		if _, err := st.GetService(name); err != nil {
 			fmt.Printf("Error: Service '%s' not found\n", name)
 			os.Exit(1)
 		}
 	}
 
-	// بررسی تداخل پورت‌ها
-	conflicts, err := storage.FindPortConflicts(serviceNames)
+	conflicts, err := st.FindPortConflicts(serviceNames)
 	if err != nil {
 		fmt.Printf("Error checking port conflicts: %v\n", err)
 		os.Exit(1)
@@ -175,26 +166,23 @@ func runStartCommand(args []string) {
 		os.Exit(1)
 	}
 
-	// اجرای سرویس‌ها
 	for _, name := range serviceNames {
-		if err := manager.StartService(ctx, name); err != nil {
+		if err := mgr.StartService(ctx, name); err != nil {
 			fmt.Printf("Error starting '%s': %v\n", name, err)
 			os.Exit(1)
 		}
 	}
 
-	// اجرای رابط متنی
-	ui := NewUI(manager, ctx)
-	program := tea.NewProgram(ui, tea.WithAltScreen())
+	u := ui.NewUI(mgr, ctx)
+	program := tea.NewProgram(u, tea.WithAltScreen())
 	if _, err := program.Run(); err != nil {
 		fmt.Printf("Error: %v\n", err)
 		os.Exit(1)
 	}
 
-	manager.StopAllServices()
+	mgr.StopAllServices()
 }
 
-// حذف یک سرویس از فایل ذخیره‌سازی
 func runDeleteCommand(args []string) {
 	if len(args) < 1 {
 		fmt.Println("Usage: pf delete <name>")
@@ -202,8 +190,8 @@ func runDeleteCommand(args []string) {
 	}
 
 	name := args[0]
-	storage := NewStorage()
-	if err := storage.DeleteService(name); err != nil {
+	st := storage.NewStorage()
+	if err := st.DeleteService(name); err != nil {
 		fmt.Printf("Error: %v\n", err)
 		os.Exit(1)
 	}
@@ -211,7 +199,6 @@ func runDeleteCommand(args []string) {
 	fmt.Printf("✓ Service '%s' deleted\n", name)
 }
 
-// پاک‌سازی تمام پردازش‌های kubectl و ssh
 func runCleanupCommand() {
 	fmt.Println("Cleaning up kubectl and ssh processes...")
 
@@ -227,7 +214,6 @@ func runCleanupCommand() {
 	fmt.Println("Note: This kills ALL kubectl and ssh processes")
 }
 
-// اجرای مستقیم kubectl با تزریق خودکار cert/key در صورت وجود
 func runKubectlCommand(args []string) {
 	if len(args) < 1 {
 		fmt.Println("Usage: pf kubectl <kubectl-args...>")
@@ -272,23 +258,22 @@ func hasKubectlClientCertArgs(args []string) bool {
 	return false
 }
 
-// مدیریت فرمان‌های گروه‌ها
 func runGroupCommand(args []string) {
 	if len(args) < 1 {
 		showGroupUsage()
 		os.Exit(1)
 	}
 
-	subCmd := normalizeToken(args[0])
-	storage := NewStorage()
+	subCmd := stringutil.NormalizeToken(args[0])
+	st := storage.NewStorage()
 
 	switch subCmd {
 	case "add", "a":
-		runGroupAddCommand(storage, args[1:])
+		runGroupAddCommand(st, args[1:])
 	case "list", "ls", "l":
-		runGroupListCommand(storage)
+		runGroupListCommand(st)
 	case "delete", "rm", "d":
-		runGroupDeleteCommand(storage, args[1:])
+		runGroupDeleteCommand(st, args[1:])
 	default:
 		fmt.Printf("Unknown group command: %s\n", subCmd)
 		showGroupUsage()
@@ -296,8 +281,7 @@ func runGroupCommand(args []string) {
 	}
 }
 
-// افزودن گروه جدید از لیست سرویس‌ها
-func runGroupAddCommand(storage *Storage, args []string) {
+func runGroupAddCommand(st *storage.Storage, args []string) {
 	if len(args) < 2 {
 		fmt.Println("Usage: pf group add <group-name> <service1,service2,...>")
 		fmt.Println("Example: pf group add database auth,core,crm")
@@ -312,7 +296,7 @@ func runGroupAddCommand(storage *Storage, args []string) {
 		serviceNames[i] = strings.TrimSpace(name)
 	}
 
-	if err := storage.AddGroup(groupName, serviceNames); err != nil {
+	if err := st.AddGroup(groupName, serviceNames); err != nil {
 		fmt.Printf("Error: %v\n", err)
 		os.Exit(1)
 	}
@@ -320,9 +304,8 @@ func runGroupAddCommand(storage *Storage, args []string) {
 	fmt.Printf("✓ Group '%s' created with %d services\n", groupName, len(serviceNames))
 }
 
-// نمایش لیست گروه‌ها
-func runGroupListCommand(storage *Storage) {
-	groups, err := storage.ListGroups()
+func runGroupListCommand(st *storage.Storage) {
+	groups, err := st.ListGroups()
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		os.Exit(1)
@@ -351,15 +334,14 @@ func runGroupListCommand(storage *Storage) {
 	fmt.Println()
 }
 
-// حذف یک گروه از فایل ذخیره‌سازی
-func runGroupDeleteCommand(storage *Storage, args []string) {
+func runGroupDeleteCommand(st *storage.Storage, args []string) {
 	if len(args) < 1 {
 		fmt.Println("Usage: pf group delete <group-name>")
 		os.Exit(1)
 	}
 
 	groupName := args[0]
-	if err := storage.DeleteGroup(groupName); err != nil {
+	if err := st.DeleteGroup(groupName); err != nil {
 		fmt.Printf("Error: %v\n", err)
 		os.Exit(1)
 	}
@@ -367,14 +349,13 @@ func runGroupDeleteCommand(storage *Storage, args []string) {
 	fmt.Printf("✓ Group '%s' deleted\n", groupName)
 }
 
-// مدیریت فرمان‌های گواهی‌نامه
 func runCertCommand(args []string) {
 	if len(args) < 1 {
 		showCertUsage()
 		os.Exit(1)
 	}
 
-	subCmd := normalizeToken(args[0])
+	subCmd := stringutil.NormalizeToken(args[0])
 	certMgr, err := cert.NewManager()
 	if err != nil {
 		fmt.Printf("Error: Failed to initialize certificate manager: %v\n", err)
@@ -395,7 +376,6 @@ func runCertCommand(args []string) {
 	}
 }
 
-// افزودن گواهی P12 برای استفاده در kubectl
 func runCertAddCommand(certMgr *cert.Manager, args []string) {
 	if len(args) < 1 {
 		fmt.Println("Usage: pf cert add <p12-file>")
@@ -422,7 +402,6 @@ func runCertAddCommand(certMgr *cert.Manager, args []string) {
 	fmt.Println("  This certificate will be used for all kubectl services")
 }
 
-// نمایش گواهی ثبت‌شده
 func runCertListCommand(certMgr *cert.Manager) {
 	config, exists := certMgr.GetCertificate()
 	if !exists {
@@ -439,7 +418,6 @@ func runCertListCommand(certMgr *cert.Manager) {
 	fmt.Println()
 }
 
-// حذف گواهی ثبت‌شده
 func runCertRemoveCommand(certMgr *cert.Manager) {
 	if err := certMgr.RemoveCertificate(); err != nil {
 		fmt.Printf("Error: %v\n", err)
@@ -449,7 +427,6 @@ func runCertRemoveCommand(certMgr *cert.Manager) {
 	fmt.Println("✓ Certificate removed successfully")
 }
 
-// نمایش راهنمای گواهی‌نامه
 func showCertUsage() {
 	help := `
 Certificate Management:
@@ -467,7 +444,6 @@ Note: The certificate will be automatically used for all kubectl services.
 	fmt.Println(help)
 }
 
-// نمایش راهنمای مدیریت گروه‌ها
 func showGroupUsage() {
 	help := `
 Group Management:
@@ -487,7 +463,6 @@ Note: Group names must not conflict with service names.
 	fmt.Println(help)
 }
 
-// نمایش راهنمای کلی برنامه
 func showUsage() {
 	help := `
 Usage:
@@ -546,15 +521,14 @@ Features:
 }
 
 func runVersionCommand() {
-	fmt.Printf("pf %s\n", Version)
-	fmt.Printf("commit: %s\n", Commit)
-	fmt.Printf("built: %s\n", BuildDate)
+	fmt.Printf("pf %s\n", version.Version)
+	fmt.Printf("commit: %s\n", version.Commit)
+	fmt.Printf("built: %s\n", version.BuildDate)
 }
 
-// تعیین سرویس‌هایی که باید اجرا شوند (تک، چندتایی، گروه یا همه)
-func resolveRunTargets(storage *Storage, input string) ([]string, error) {
+func resolveRunTargets(st *storage.Storage, input string) ([]string, error) {
 	if input == "all" {
-		names, err := storage.ListServiceNames()
+		names, err := st.ListServiceNames()
 		if err != nil {
 			return nil, err
 		}
@@ -572,7 +546,7 @@ func resolveRunTargets(storage *Storage, input string) ([]string, error) {
 
 	if len(serviceNames) == 1 {
 		name := serviceNames[0]
-		hasConflict, err := storage.HasNameConflict(name)
+		hasConflict, err := st.HasNameConflict(name)
 		if err != nil {
 			return nil, err
 		}
@@ -580,11 +554,11 @@ func resolveRunTargets(storage *Storage, input string) ([]string, error) {
 			return nil, fmt.Errorf("name '%s' exists as both service and group", name)
 		}
 
-		if _, err := storage.GetService(name); err == nil {
+		if _, err := st.GetService(name); err == nil {
 			return serviceNames, nil
 		}
 
-		groupServices, err := storage.GetGroupServices(name)
+		groupServices, err := st.GetGroupServices(name)
 		if err != nil {
 			return nil, fmt.Errorf("service or group '%s' not found", name)
 		}
