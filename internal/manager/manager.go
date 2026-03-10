@@ -346,19 +346,30 @@ func (m *ServiceManager) runServiceOnce(ctx context.Context, svc *runningService
 
 // افزودن فلگ‌های گواهی به فرمان kubectl
 func addKubectlCertFlags(command, certPath, keyPath string) string {
-	if strings.Contains(command, "--client-certificate") {
+	if !strings.Contains(command, "kubectl ") {
 		return command
 	}
 
 	certFlags := fmt.Sprintf("--client-certificate=%s --client-key=%s ", certPath, keyPath)
-
-	idx := strings.Index(command, "kubectl ")
-	if idx == -1 {
+	parts := strings.Split(command, "kubectl ")
+	if len(parts) < 2 {
 		return command
 	}
 
-	insertPos := idx + len("kubectl ")
-	return command[:insertPos] + certFlags + command[insertPos:]
+	var out strings.Builder
+	out.Grow(len(command) + len(certFlags)*(len(parts)-1))
+	out.WriteString(parts[0])
+
+	for _, part := range parts[1:] {
+		trimmed := strings.TrimLeft(part, " \t")
+		out.WriteString("kubectl ")
+		if !(strings.HasPrefix(trimmed, "--client-certificate") || strings.HasPrefix(trimmed, "--client-key")) {
+			out.WriteString(certFlags)
+		}
+		out.WriteString(part)
+	}
+
+	return out.String()
 }
 
 // کشتن کل درخت پروسه (شامل child process‌ها)

@@ -1,6 +1,9 @@
 package manager
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestClassifyOutputLine(t *testing.T) {
 	tests := []struct {
@@ -208,6 +211,16 @@ func TestAddKubectlCertFlags(t *testing.T) {
 	result3 := addKubectlCertFlags(noKubectl, "/tmp/cert.pem", "/tmp/key.pem")
 	if result3 != noKubectl {
 		t.Errorf("should not modify non-kubectl command")
+	}
+
+	// Multiple kubectl invocations in one command
+	multi := "kubectl config use-context production && kubectl -n prod port-forward svc/db 5432:5432"
+	result4 := addKubectlCertFlags(multi, "/tmp/cert.pem", "/tmp/key.pem")
+	if strings.Count(result4, "--client-certificate=/tmp/cert.pem") != 2 {
+		t.Errorf("expected cert flag on both kubectl commands, got %q", result4)
+	}
+	if strings.Count(result4, "--client-key=/tmp/key.pem") != 2 {
+		t.Errorf("expected key flag on both kubectl commands, got %q", result4)
 	}
 }
 
