@@ -166,15 +166,19 @@ func runStartCommand(args []string) {
 		os.Exit(1)
 	}
 
-	for _, name := range serviceNames {
-		if err := mgr.StartService(ctx, name); err != nil {
-			fmt.Printf("Error starting '%s': %v\n", name, err)
-			os.Exit(1)
-		}
-	}
-
+	// Start UI immediately
 	u := ui.NewUI(mgr, ctx)
 	program := tea.NewProgram(u, tea.WithAltScreen())
+
+	// Start all services in parallel - they will appear in UI as they connect
+	for _, name := range serviceNames {
+		go func(serviceName string) {
+			if err := mgr.StartService(ctx, serviceName); err != nil {
+				fmt.Printf("Error starting '%s': %v\n", serviceName, err)
+			}
+		}(name)
+	}
+
 	if _, err := program.Run(); err != nil {
 		fmt.Printf("Error: %v\n", err)
 		os.Exit(1)
