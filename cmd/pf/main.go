@@ -117,6 +117,8 @@ func runStartCommand(args []string) {
 		fmt.Println("Usage: pf run <name1,name2,...>")
 		fmt.Println("       pf run all")
 		fmt.Println("       pf run <group-name>")
+		fmt.Println("       pf run <group1,group2,...>")
+		fmt.Println("       pf run <group-or-service,...>")
 		os.Exit(1)
 	}
 
@@ -461,6 +463,8 @@ Examples:
   pf group list
   pf group delete database
   pf run database                        Run all services in group
+  pf run database,cache                  Run multiple groups
+  pf run database,db                     Run mixed group and service
 
 Note: Group names must not conflict with service names.
 `
@@ -494,6 +498,8 @@ Examples:
   pf k describe pod my-pod -n production
   pf run db
   pf run db,redis
+  pf run backend,cache
+  pf run backend,redis
   pf run all
   pf delete db
 
@@ -530,7 +536,14 @@ func runVersionCommand() {
 	fmt.Printf("built: %s\n", version.BuildDate)
 }
 
-func resolveRunTargets(st *storage.Storage, input string) ([]string, error) {
+type runTargetStore interface {
+	ListServiceNames() ([]string, error)
+	HasNameConflict(name string) (bool, error)
+	GetService(name string) (string, error)
+	GetGroupServices(name string) ([]string, error)
+}
+
+func resolveRunTargets(st runTargetStore, input string) ([]string, error) {
 	if input == "all" {
 		names, err := st.ListServiceNames()
 		if err != nil {
@@ -543,33 +556,76 @@ func resolveRunTargets(st *storage.Storage, input string) ([]string, error) {
 		return names, nil
 	}
 
-	serviceNames := strings.Split(input, ",")
-	for i, name := range serviceNames {
-		serviceNames[i] = strings.TrimSpace(name)
+	targets := strings.Split(input, ",")
+	for i, name := range targets {
+		targets[i] = strings.TrimSpace(name)
 	}
 
-	if len(serviceNames) == 1 {
-		name := serviceNames[0]
-		hasConflict, err := st.HasNameConflict(name)
+	if len(targets) == 1 {
+		return resolveSingleRunTarget(st, targets[0])
+	}
+
+	resolvedServices := make([]string, 0, len(targets))
+	seen := make(map[string]struct{}, len(targets))
+
+	for _, target := range targets {
+		if target == "" {
+			return nil, fmt.Errorf("invalid run targets: empty value in '%s'", input)
+		}
+
+		services, err := resolveSingleRunTarget(st, target)
 		if err != nil {
 			return nil, err
 		}
-		if hasConflict {
-			return nil, fmt.Errorf("name '%s' exists as both service and group", name)
-		}
 
-		if _, err := st.GetService(name); err == nil {
-			return serviceNames, nil
+		for _, serviceName := range services {
+			if _, exists := seen[serviceName]; exists {
+				continue
+			}
+			seen[serviceName] = struct{}{}
+			resolvedServices = append(resolvedServices, serviceName)
 		}
-
-		groupServices, err := st.GetGroupServices(name)
-		if err != nil {
-			return nil, fmt.Errorf("service or group '%s' not found", name)
-		}
-
-		fmt.Printf("Running group '%s' (%d services)...\n", name, len(groupServices))
-		return groupServices, nil
 	}
 
-	return serviceNames, nil
+	return resolvedServices, nil
+}
+
+func resolveSingleRunTarget(st runTargetStore, target string) ([]string, error) {
+	if target == "" {
+		return nil, fmt.Errorf("invalid run target: empty value")
+	}
+
+	hasConflict, err := st.HasNameConflict(target)
+	if err != nil {
+		return nil, err
+	}
+	if hasConflict {
+		return nil, fmt.Errorf("name '%s' exists as both service and group", target)
+	}
+
+	if _, err := st.GetService(target); err == nil {
+		return []string{target}, nil
+	} else if !isNotFoundErr(err) {
+		return nil, err
+	}
+
+	groupServices, err := st.GetGroupServices(target)
+	if err == nil {
+		if len(groupServices) > 0 {
+			fmt.Printf("Running group '%s' (%d services)...\n", target, len(groupServices))
+		}
+		return groupServices, nil
+	}
+	if !isNotFoundErr(err) {
+		return nil, err
+	}
+
+	return nil, fmt.Errorf("service or group '%s' not found", target)
+}
+
+func isNotFoundErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "not found")
 }
