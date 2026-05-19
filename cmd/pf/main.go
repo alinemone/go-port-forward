@@ -526,6 +526,8 @@ Features:
   • Run all services at once
   • Error display in terminal
   • Clean shutdown on quit
+Source:
+   url: https://github.com/alinemone/go-port-forward
 `
 	fmt.Println(help)
 }
