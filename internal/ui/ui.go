@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -27,6 +28,12 @@ type spinnerTickMsg time.Time
 
 // پایان کار خاموش‌شدن (StopAllServices تمام شد)
 type shutdownDoneMsg struct{}
+
+// درخواست پاک‌سازی خودکار پیام وضعیت پس از مدتی
+type clearStatusMsg struct{ seq int }
+
+// مدت ماندگاری پیام وضعیت پیش از پاک‌سازی خودکار
+const statusClearDelay = 5 * time.Second
 
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
@@ -52,20 +59,28 @@ var (
 
 // مدل اصلی UI
 type UI struct {
-	manager           *manager.ServiceManager
-	services          []model.Service
-	cursorIndex       int
-	quitting          bool
-	width             int
-	height            int
-	viewport          viewport.Model
-	ready             bool
-	ctx               context.Context
-	addMode           bool
-	addCandidates     []string
-	addCursor         int
-	addSelected       map[string]bool
+	manager       *manager.ServiceManager
+	services      []model.Service
+	cursorIndex   int
+	quitting      bool
+	width         int
+	height        int
+	viewport      viewport.Model
+	ready         bool
+	ctx           context.Context
+	addMode       bool
+	addCandidates []string
+	addCursor     int
+	addSelected   map[string]bool
+	// حالت فرم افزودن/ویرایش سرویس داخل overlay: "" یعنی لیست، "new" یا "edit"
+	addFormMode       string
+	addFormName       textinput.Model
+	addFormCmd        textinput.Model
+	addFormFocus      int    // 0 = name, 1 = command
+	addFormOrig       string // نام اصلی هنگام ویرایش (برای rename/restart)
+	addFormErr        string // پیام خطای اعتبارسنجی داخل فرم
 	editStatus        string
+	editStatusSeq     int  // شناسه‌ی نسخه‌ی پیام وضعیت برای پاک‌سازی خودکار امن
 	logFilterSelected bool // نمایش فقط لاگ سرویسِ انتخاب‌شده
 	spinnerFrame      int  // فریم اسپینر هنگام خاموش‌شدن
 }
@@ -177,21 +192,32 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			u.refreshViewportContent()
 			u.viewport.GotoBottom()
 
-		case "e":
-			return u, u.launchEditor()
-
 		default:
 			u.viewport, cmd = u.viewport.Update(msg)
 		}
 
 	case editResultMsg:
+		var status string
 		switch {
 		case msg.ok:
-			u.editStatus = fmt.Sprintf("✓ Config saved: %d service(s), %d group(s) — affects future runs", msg.services, msg.groups)
+			status = fmt.Sprintf("✓ Config saved: %d service(s), %d group(s) — affects future runs", msg.services, msg.groups)
+			// اگر overlay باز است، لیست سرویس‌ها بعد از ویرایش خارجی تازه شود
+			if u.addMode && u.addFormMode == "" {
+				u.refreshAddCandidates()
+			}
 		case msg.tmpPath != "":
-			u.editStatus = fmt.Sprintf("✗ Invalid config: %v — edits kept at %s (use 'pf edit' to fix)", msg.err, msg.tmpPath)
+			status = fmt.Sprintf("✗ Invalid config: %v — edits kept at %s (use 'pf edit' to fix)", msg.err, msg.tmpPath)
 		case msg.err != nil:
-			u.editStatus = fmt.Sprintf("✗ Edit failed: %v", msg.err)
+			status = fmt.Sprintf("✗ Edit failed: %v", msg.err)
+		}
+		if status == "" {
+			return u, nil
+		}
+		return u, u.setStatus(status)
+
+	case clearStatusMsg:
+		if msg.seq == u.editStatusSeq {
+			u.editStatus = ""
 		}
 		return u, nil
 
@@ -224,6 +250,17 @@ func (u *UI) shutdownCmd() tea.Cmd {
 		u.manager.StopAllServices()
 		return shutdownDoneMsg{}
 	}
+}
+
+// setStatus پیام وضعیت را تنظیم و یک تایمر برای پاک‌سازی خودکار آن برمی‌گرداند.
+// از شناسه‌ی نسخه استفاده می‌شود تا تایمرِ یک پیام قدیمی، پیام جدیدتر را پاک نکند.
+func (u *UI) setStatus(text string) tea.Cmd {
+	u.editStatus = text
+	u.editStatusSeq++
+	seq := u.editStatusSeq
+	return tea.Tick(statusClearDelay, func(time.Time) tea.Msg {
+		return clearStatusMsg{seq: seq}
+	})
 }
 
 // spinnerTick تیک بعدی انیمیشن اسپینر
@@ -297,6 +334,9 @@ func (u *UI) View() string {
 	}
 
 	if u.addMode {
+		if u.addFormMode != "" {
+			return u.renderServiceForm()
+		}
 		return u.renderAddServiceOverlay()
 	}
 
@@ -332,7 +372,8 @@ func (u *UI) View() string {
 	return lipgloss.JoinVertical(lipgloss.Left, sections...)
 }
 
-// ورود به حالت افزودن سرویس
+// ورود به حالت افزودن سرویس — همه‌ی سرویس‌های ذخیره‌شده لیست می‌شوند
+// (در حال اجراها با برچسب running و غیرقابل‌انتخاب برای اجرا، ولی قابل ویرایش).
 func (u *UI) enterAddMode() {
 	st := storage.NewStorage()
 	allServices, err := st.ListServiceNames()
@@ -340,33 +381,40 @@ func (u *UI) enterAddMode() {
 		return
 	}
 
-	runningServices := u.manager.ListServiceStates()
-	runningMap := make(map[string]bool)
-	for i := range runningServices {
-		runningMap[runningServices[i].Name] = true
-	}
+	u.addMode = true
+	u.addFormMode = ""
+	u.addFormErr = ""
+	u.addCandidates = allServices
+	u.addCursor = 0
+	u.addSelected = make(map[string]bool)
+}
 
-	available := make([]string, 0)
-	for _, serviceName := range allServices {
-		if !runningMap[serviceName] {
-			available = append(available, serviceName)
-		}
-	}
+// خروج کامل از حالت افزودن و پاک‌سازی وضعیت
+func (u *UI) exitAddMode() {
+	u.addMode = false
+	u.addFormMode = ""
+	u.addFormErr = ""
+	u.addCandidates = nil
+	u.addCursor = 0
+	u.addSelected = nil
+}
 
-	if len(allServices) > 0 {
-		u.addMode = true
-		if len(available) == 0 {
-			u.addCandidates = []string{"(All services are already running)"}
-		} else {
-			u.addCandidates = available
-		}
-		u.addCursor = 0
-		u.addSelected = make(map[string]bool)
+// مجموعه‌ی نام سرویس‌های در حال اجرا (از روی وضعیت کش‌شده‌ی UI)
+func (u *UI) runningNameSet() map[string]bool {
+	set := make(map[string]bool, len(u.services))
+	for i := range u.services {
+		set[u.services[i].Name] = true
 	}
+	return set
 }
 
 // پردازش کلیدها در حالت افزودن سرویس
 func (u *UI) updateAddMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// در حالت فرم (ساخت/ویرایش) کلیدها به فرم می‌روند
+	if u.addFormMode != "" {
+		return u.updateAddForm(msg)
+	}
+
 	keyRaw := msg.String()
 	key := keyRaw
 	if keyRaw != " " {
@@ -374,10 +422,7 @@ func (u *UI) updateAddMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	switch key {
 	case "esc":
-		u.addMode = false
-		u.addCandidates = nil
-		u.addCursor = 0
-		u.addSelected = nil
+		u.exitAddMode()
 	case "up", "k":
 		if u.addCursor > 0 {
 			u.addCursor--
@@ -387,24 +432,217 @@ func (u *UI) updateAddMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			u.addCursor++
 		}
 	case " ":
-		if u.addCursor < len(u.addCandidates) {
+		if u.addCursor >= 0 && u.addCursor < len(u.addCandidates) {
 			serviceName := u.addCandidates[u.addCursor]
-			if serviceName != "(All services are already running)" {
+			if !u.runningNameSet()[serviceName] {
 				u.addSelected[serviceName] = !u.addSelected[serviceName]
 			}
 		}
+	case "n":
+		return u, u.openNewServiceForm()
+	case "e":
+		return u, u.openEditServiceForm()
+	case "c":
+		// ویرایش کامل کانفیگ (سرویس‌ها + گروه‌ها) در ادیتور خارجی
+		return u, u.launchEditor()
 	case "enter":
+		running := u.runningNameSet()
 		for serviceName, selected := range u.addSelected {
-			if selected {
+			if selected && !running[serviceName] {
 				_ = u.manager.StartStoredService(u.ctx, serviceName)
 			}
 		}
-		u.addMode = false
-		u.addCandidates = nil
-		u.addCursor = 0
-		u.addSelected = nil
+		u.exitAddMode()
 	}
 	return u, nil
+}
+
+// newServiceTextInput یک فیلد ورودی متنی آماده می‌سازد
+func newServiceTextInput(placeholder, value string) textinput.Model {
+	ti := textinput.New()
+	ti.Placeholder = placeholder
+	ti.CharLimit = 1000
+	ti.Width = 64
+	if value != "" {
+		ti.SetValue(value)
+	}
+	return ti
+}
+
+// openNewServiceForm فرم ساخت سرویس جدید را باز می‌کند
+func (u *UI) openNewServiceForm() tea.Cmd {
+	u.addFormMode = "new"
+	u.addFormOrig = ""
+	u.addFormErr = ""
+	u.addFormName = newServiceTextInput("e.g. db", "")
+	u.addFormCmd = newServiceTextInput("e.g. kubectl port-forward service/postgres 5432:5432", "")
+	u.addFormFocus = 0
+	u.addFormCmd.Blur()
+	return u.addFormName.Focus()
+}
+
+// openEditServiceForm فرم ویرایش سرویسِ زیر کرسر را باز می‌کند
+func (u *UI) openEditServiceForm() tea.Cmd {
+	if u.addCursor < 0 || u.addCursor >= len(u.addCandidates) {
+		return nil
+	}
+	name := u.addCandidates[u.addCursor]
+	command, err := storage.NewStorage().GetService(name)
+	if err != nil {
+		return nil
+	}
+	u.addFormMode = "edit"
+	u.addFormOrig = name
+	u.addFormErr = ""
+	u.addFormName = newServiceTextInput("service name", name)
+	u.addFormCmd = newServiceTextInput("command", command)
+	u.addFormFocus = 0
+	u.addFormCmd.Blur()
+	return u.addFormName.Focus()
+}
+
+// closeAddForm فرم را می‌بندد و به لیست برمی‌گردد
+func (u *UI) closeAddForm() {
+	u.addFormMode = ""
+	u.addFormErr = ""
+	u.addFormName.Blur()
+	u.addFormCmd.Blur()
+}
+
+// toggleAddFormFocus فوکوس را بین فیلد نام و کامند جابه‌جا می‌کند
+func (u *UI) toggleAddFormFocus() tea.Cmd {
+	if u.addFormFocus == 0 {
+		u.addFormFocus = 1
+		u.addFormName.Blur()
+		return u.addFormCmd.Focus()
+	}
+	u.addFormFocus = 0
+	u.addFormCmd.Blur()
+	return u.addFormName.Focus()
+}
+
+// updateAddForm پردازش کلیدها در حالت فرم ساخت/ویرایش
+func (u *UI) updateAddForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	keyRaw := msg.String()
+	key := keyRaw
+	if keyRaw != " " {
+		key = stringutil.NormalizeToken(keyRaw)
+	}
+
+	switch key {
+	case "esc":
+		u.closeAddForm()
+		return u, nil
+	case "tab", "shift+tab", "up", "down":
+		return u, u.toggleAddFormFocus()
+	case "enter":
+		return u.submitServiceForm()
+	}
+
+	var cmd tea.Cmd
+	if u.addFormFocus == 0 {
+		u.addFormName, cmd = u.addFormName.Update(msg)
+	} else {
+		u.addFormCmd, cmd = u.addFormCmd.Update(msg)
+	}
+	return u, cmd
+}
+
+// submitServiceForm فرم را اعتبارسنجی و ذخیره می‌کند
+func (u *UI) submitServiceForm() (tea.Model, tea.Cmd) {
+	name := strings.TrimSpace(u.addFormName.Value())
+	command := strings.TrimSpace(u.addFormCmd.Value())
+
+	if err := manager.ValidateServiceName(name); err != nil {
+		u.addFormErr = err.Error()
+		return u, nil
+	}
+	if err := manager.ValidateCommand(command); err != nil {
+		u.addFormErr = err.Error()
+		return u, nil
+	}
+
+	st := storage.NewStorage()
+	var restartCmd tea.Cmd
+	var status string
+
+	switch u.addFormMode {
+	case "new":
+		if _, err := st.GetService(name); err == nil {
+			u.addFormErr = fmt.Sprintf("a service named '%s' already exists", name)
+			return u, nil
+		}
+		if err := st.AddService(name, command); err != nil {
+			u.addFormErr = err.Error()
+			return u, nil
+		}
+		status = fmt.Sprintf("✓ Service '%s' created — select it and press Enter to run", name)
+
+	case "edit":
+		orig := u.addFormOrig
+		wasRunning := u.runningNameSet()[orig]
+
+		if name != orig {
+			if err := st.RenameService(orig, name); err != nil {
+				u.addFormErr = err.Error()
+				return u, nil
+			}
+		}
+		if err := st.AddService(name, command); err != nil {
+			u.addFormErr = err.Error()
+			return u, nil
+		}
+
+		if wasRunning {
+			newName := name
+			restartCmd = func() tea.Msg {
+				u.manager.StopService(orig)
+				_ = u.manager.StartStoredService(u.ctx, newName)
+				return nil
+			}
+			status = fmt.Sprintf("✓ Service '%s' updated — restarting to apply changes", name)
+		} else {
+			status = fmt.Sprintf("✓ Service '%s' updated", name)
+		}
+	}
+
+	u.closeAddForm()
+	u.refreshAddCandidates()
+	u.focusCandidate(name)
+
+	statusCmd := u.setStatus(status)
+	if restartCmd != nil {
+		return u, tea.Batch(restartCmd, statusCmd)
+	}
+	return u, statusCmd
+}
+
+// refreshAddCandidates لیست سرویس‌ها را از storage تازه می‌کند
+func (u *UI) refreshAddCandidates() {
+	names, err := storage.NewStorage().ListServiceNames()
+	if err != nil {
+		return
+	}
+	u.addCandidates = names
+	if u.addSelected == nil {
+		u.addSelected = make(map[string]bool)
+	}
+	if u.addCursor >= len(u.addCandidates) {
+		u.addCursor = len(u.addCandidates) - 1
+	}
+	if u.addCursor < 0 {
+		u.addCursor = 0
+	}
+}
+
+// focusCandidate کرسر را روی سرویس با نام داده‌شده می‌برد
+func (u *UI) focusCandidate(name string) {
+	for i, c := range u.addCandidates {
+		if c == name {
+			u.addCursor = i
+			return
+		}
+	}
 }
 
 func (u *UI) ensureCursorInRange() {
@@ -859,6 +1097,8 @@ func (u *UI) renderAddServiceOverlay() string {
 		width = 60
 	}
 
+	running := u.runningNameSet()
+
 	maxNameLen := 7
 	for _, serviceName := range u.addCandidates {
 		nameLen := len(serviceName)
@@ -870,7 +1110,7 @@ func (u *UI) renderAddServiceOverlay() string {
 		maxNameLen = 30
 	}
 
-	rows := make([]string, 0, len(u.addCandidates)+2)
+	rows := make([]string, 0, len(u.addCandidates)+3)
 	headerName := fmt.Sprintf("%-*s", maxNameLen, "SERVICE")
 	header := lipgloss.NewStyle().
 		Foreground(colorText).
@@ -887,16 +1127,17 @@ func (u *UI) renderAddServiceOverlay() string {
 	}
 	rows = append(rows, strings.Repeat("─", sepWidth))
 
+	if len(u.addCandidates) == 0 {
+		rows = append(rows, lipgloss.NewStyle().
+			Foreground(colorMuted).
+			Italic(true).
+			Render("No services yet — press 'n' to create one"))
+	}
+
 	for i, serviceName := range u.addCandidates {
 		highlight := "  "
 		if i == u.addCursor {
 			highlight = "► "
-		}
-
-		isSelected := u.addSelected != nil && u.addSelected[serviceName]
-		checkbox := "[ ]"
-		if isSelected {
-			checkbox = "[✓]"
 		}
 
 		displayName := serviceName
@@ -904,19 +1145,27 @@ func (u *UI) renderAddServiceOverlay() string {
 			displayName = displayName[:maxNameLen-3] + "..."
 		}
 		name := fmt.Sprintf("%-*s", maxNameLen, displayName)
-		selectStr := fmt.Sprintf("%-7s", checkbox)
-
 		styledName := lipgloss.NewStyle().
 			Foreground(colorText).
 			Bold(true).
 			Render(name)
 
-		styledSelect := lipgloss.NewStyle().
-			Foreground(colorMuted).
-			Render(selectStr)
+		var marker string
+		if running[serviceName] {
+			marker = lipgloss.NewStyle().
+				Foreground(colorAccentAlt).
+				Render(fmt.Sprintf("%-7s", "running"))
+		} else {
+			checkbox := "[ ]"
+			if u.addSelected != nil && u.addSelected[serviceName] {
+				checkbox = "[✓]"
+			}
+			marker = lipgloss.NewStyle().
+				Foreground(colorMuted).
+				Render(fmt.Sprintf("%-7s", checkbox))
+		}
 
-		row := highlight + styledName + "  " + styledSelect
-		rows = append(rows, row)
+		rows = append(rows, highlight+styledName+"  "+marker)
 	}
 
 	table := lipgloss.JoinVertical(lipgloss.Left, rows...)
@@ -928,7 +1177,7 @@ func (u *UI) renderAddServiceOverlay() string {
 
 	overlayBox := style.Render(table)
 
-	instructions := "↑↓:navigate • Space:toggle selection • Enter:add selected • Esc:cancel"
+	instructions := "↑↓:navigate • Space:select • Enter:run • n:new • e:edit • c:config in editor • Esc:cancel"
 	instructionStyled := lipgloss.NewStyle().
 		Foreground(colorMuted).
 		Render(instructions)
@@ -936,14 +1185,75 @@ func (u *UI) renderAddServiceOverlay() string {
 	return lipgloss.JoinVertical(lipgloss.Left, overlayBox, instructionStyled)
 }
 
+// renderServiceForm فرم ساخت/ویرایش سرویس را رندر می‌کند
+func (u *UI) renderServiceForm() string {
+	width := u.width
+	if width <= 0 {
+		width = 120
+	}
+	if width < 60 {
+		width = 60
+	}
+
+	title := "Add new service"
+	if u.addFormMode == "edit" {
+		title = fmt.Sprintf("Edit service: %s", u.addFormOrig)
+	}
+	titleStyled := lipgloss.NewStyle().
+		Foreground(colorAccent).
+		Bold(true).
+		Render(title)
+
+	labelStyle := lipgloss.NewStyle().Foreground(colorMuted)
+	activeLabel := lipgloss.NewStyle().Foreground(colorAccentAlt).Bold(true)
+
+	nameLabel := labelStyle.Render("  Name:")
+	cmdLabel := labelStyle.Render("  Command:")
+	if u.addFormFocus == 0 {
+		nameLabel = activeLabel.Render("► Name:")
+	} else {
+		cmdLabel = activeLabel.Render("► Command:")
+	}
+
+	rows := []string{
+		titleStyled,
+		"",
+		nameLabel,
+		"  " + u.addFormName.View(),
+		"",
+		cmdLabel,
+		"  " + u.addFormCmd.View(),
+	}
+
+	if u.addFormErr != "" {
+		rows = append(rows, "", lipgloss.NewStyle().Foreground(colorError).Render("✗ "+u.addFormErr))
+	}
+
+	body := lipgloss.JoinVertical(lipgloss.Left, rows...)
+	style := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorBorder).
+		Padding(0, 1).
+		Width(width - 2)
+
+	box := style.Render(body)
+
+	instructions := "Tab/↑↓:switch field • Enter:save • Esc:back"
+	instructionStyled := lipgloss.NewStyle().
+		Foreground(colorMuted).
+		Render(instructions)
+
+	return lipgloss.JoinVertical(lipgloss.Left, box, instructionStyled)
+}
+
 func renderHelp(width int, logScope string) string {
 	if width < 60 {
 		width = 60
 	}
 
-	helpText := fmt.Sprintf("↑↓/j/k: move  •  l: logs=%s  •  a: add  •  r: restart  •  ^r: restart all  •  s: stop  •  e: edit  •  q: quit", logScope)
+	helpText := fmt.Sprintf("↑↓/j/k: move  •  l: logs=%s  •  a: add/edit  •  r: restart  •  ^r: restart all  •  s: stop  •  q: quit", logScope)
 	if width < 90 {
-		helpText = fmt.Sprintf("↑↓: move  •  l:logs=%s  •  a:add  •  r:restart  •  s:stop  •  e:edit  •  q:quit", logScope)
+		helpText = fmt.Sprintf("↑↓: move  •  l:logs=%s  •  a:add/edit  •  r:restart  •  s:stop  •  q:quit", logScope)
 	}
 	help := lipgloss.NewStyle().
 		Foreground(colorMuted).
