@@ -44,20 +44,21 @@ var (
 
 // مدل اصلی UI
 type UI struct {
-	manager       *manager.ServiceManager
-	services      []model.Service
-	cursorIndex   int
-	quitting      bool
-	width         int
-	height        int
-	viewport      viewport.Model
-	ready         bool
-	ctx           context.Context
-	addMode       bool
-	addCandidates []string
-	addCursor     int
-	addSelected   map[string]bool
-	editStatus    string
+	manager           *manager.ServiceManager
+	services          []model.Service
+	cursorIndex       int
+	quitting          bool
+	width             int
+	height            int
+	viewport          viewport.Model
+	ready             bool
+	ctx               context.Context
+	addMode           bool
+	addCandidates     []string
+	addCursor         int
+	addSelected       map[string]bool
+	editStatus        string
+	logFilterSelected bool // نمایش فقط لاگ سرویسِ انتخاب‌شده
 }
 
 const uiTickInterval = 500 * time.Millisecond
@@ -122,6 +123,7 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "up", "k":
 			if u.cursorIndex > 0 {
 				u.cursorIndex--
+				u.onCursorMoved()
 			} else {
 				u.viewport, cmd = u.viewport.Update(msg)
 			}
@@ -129,6 +131,7 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "down", "j":
 			if u.cursorIndex < len(u.services)-1 {
 				u.cursorIndex++
+				u.onCursorMoved()
 			} else {
 				u.viewport, cmd = u.viewport.Update(msg)
 			}
@@ -155,6 +158,12 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "a":
 			u.enterAddMode()
+
+		case "f":
+			// سوییچ بین «لاگ همه» و «فقط لاگ سرویسِ انتخاب‌شده»
+			u.logFilterSelected = !u.logFilterSelected
+			u.refreshViewportContent()
+			u.viewport.GotoBottom()
 
 		case "e":
 			return u, u.launchEditor()
@@ -279,7 +288,7 @@ func (u *UI) View() string {
 		sections = append(sections, lipgloss.NewStyle().Foreground(statusColor).Render(u.editStatus))
 	}
 
-	sections = append(sections, renderHelp(u.width))
+	sections = append(sections, renderHelp(u.width, u.logScopeLabel()))
 	return lipgloss.JoinVertical(lipgloss.Left, sections...)
 }
 
@@ -378,14 +387,36 @@ func (u *UI) refreshViewportContent() {
 		contentWidth = 40
 	}
 
+	// انتخاب دامنه‌ی لاگ: همه یا فقط سرویسِ زیر کرسر
+	services := u.services
+	if u.logFilterSelected && u.cursorIndex >= 0 && u.cursorIndex < len(u.services) {
+		services = []model.Service{u.services[u.cursorIndex]}
+	}
+
 	// فقط وقتی کاربر ته صفحه است لاگ‌های جدید را دنبال کن؛
 	// اگر بالا اسکرول کرده، موقعیتش حفظ می‌شود و با رندر مجدد نمی‌پرد.
 	follow := u.viewport.AtBottom()
-	newContent := renderLogsContent(u.services, contentWidth)
+	newContent := renderLogsContent(services, contentWidth)
 	u.viewport.SetContent(newContent)
 	if follow {
 		u.viewport.GotoBottom()
 	}
+}
+
+// onCursorMoved هنگام جابه‌جایی کرسر، اگر فیلتر فعال باشد لاگ را برای سرویس جدید تازه می‌کند.
+func (u *UI) onCursorMoved() {
+	if u.logFilterSelected {
+		u.refreshViewportContent()
+		u.viewport.GotoBottom()
+	}
+}
+
+// logScopeLabel برچسب دامنه‌ی لاگ برای نوار راهنما
+func (u *UI) logScopeLabel() string {
+	if u.logFilterSelected && u.cursorIndex >= 0 && u.cursorIndex < len(u.services) {
+		return truncateRunes(u.services[u.cursorIndex].Name, 14)
+	}
+	return "ALL"
 }
 
 func (u *UI) ensureViewportSize() {
@@ -865,14 +896,14 @@ func (u *UI) renderAddServiceOverlay() string {
 	return lipgloss.JoinVertical(lipgloss.Left, overlayBox, instructionStyled)
 }
 
-func renderHelp(width int) string {
+func renderHelp(width int, logScope string) string {
 	if width < 60 {
 		width = 60
 	}
 
-	helpText := "↑↓/j/k: move  •  a: add  •  r: restart  •  ^r: restart all  •  s: stop  •  e: edit  •  q: quit"
+	helpText := fmt.Sprintf("↑↓/j/k: move  •  f: logs=%s  •  a: add  •  r: restart  •  ^r: restart all  •  s: stop  •  e: edit  •  q: quit", logScope)
 	if width < 90 {
-		helpText = "↑↓: move  •  a:add  •  r:restart  •  s:stop  •  e:edit  •  q:quit"
+		helpText = fmt.Sprintf("↑↓: move  •  f:logs=%s  •  a:add  •  r:restart  •  s:stop  •  e:edit  •  q:quit", logScope)
 	}
 	help := lipgloss.NewStyle().
 		Foreground(colorMuted).

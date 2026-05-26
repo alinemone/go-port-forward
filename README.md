@@ -268,6 +268,7 @@ When running services:
 
 - **↑↓** / **j k** - Move selection between services
 - **PgUp** / **PgDn** / **mouse wheel** - Scroll the log panel
+- **f** - Toggle the log panel between all services and only the selected service
 - **r** - Restart the selected service
 - **Ctrl+R** - Restart all services
 - **s** - Stop the selected service
