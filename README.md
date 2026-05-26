@@ -157,7 +157,10 @@ pf list
 | `kubectl` | `k` | Run any kubectl command with configured certificate |
 | `run`   | `r`   | Run services with TUI |
 | `delete`| `d`   | Delete service |
-| `cleanup`| `c`  | Kill all kubectl/ssh processes |
+| `rename`| `ren`, `mv` | Rename a service or group |
+| `edit`  |       | Bulk-edit all services/groups in `$EDITOR` |
+| `cleanup`| `c`  | Free configured ports (`--all` kills all kubectl/ssh) |
+| `group` | `g`   | Manage groups (add/add-service/remove-service/list/delete/rename) |
 | `cert`  |       | Manage certificates (add/list/remove) |
 | `version`  | `v`  | Show build version details |
 | `help`  | `h`   | Show help |
@@ -220,31 +223,71 @@ pf add production "kubectl -n prod port-forward service/postgres 5432:5432"
 pf run production
 ```
 
+### Rename a Service or Group
+
+```bash
+# Rename a service (group memberships are updated automatically)
+pf rename db database
+
+# Rename a group explicitly
+pf group rename backend back
+```
+
+### Add / Remove Services in a Group
+
+```bash
+# Add services to an existing group (deduplicated)
+pf group add-service database wallet-pg,redis
+
+# Remove services from a group
+pf group remove-service database redis
+```
+
+### Bulk Edit Configuration
+
+```bash
+# Open all services and groups in your $EDITOR (vim/nano/notepad...)
+pf edit
+```
+Great for the initial setup when adding many services at once. The file is
+validated on save; invalid JSON is rejected and you are offered to reopen and fix it.
+
 ### Cleanup Stuck Ports
 
 ```bash
-# Kill all kubectl/ssh processes
+# Free only the local ports used by your configured services
 pf cleanup
+
+# Kill ALL kubectl/ssh processes on the machine
+pf cleanup --all
 ```
 
 ## 🎮 TUI Controls
 
 When running services:
 
-- **q** or **Ctrl+C** - Quit and stop all services
-- **r** - Manual refresh
+- **↑↓** / **j k** - Move selection between services
+- **PgUp** / **PgDn** / **mouse wheel** - Scroll the log panel
+- **r** - Restart the selected service
+- **Ctrl+R** - Restart all services
+- **s** - Stop the selected service
+- **a** - Add another stored service to the running set
+- **e** - Bulk-edit configuration in `$EDITOR`
+- **q** / **Esc** / **Ctrl+C** - Quit and stop all services
 
 ## 📂 File Locations
 
 ```
 ~/.pf/
 ├── certificate.json      → Certificate configuration
+├── services.json         → Stored services and groups
 └── certs/
     ├── client-cert.pem   → Extracted certificate
     └── client-key.pem    → Private key
-
-services.json             → Stored services (same directory as executable)
 ```
+
+> On first run, an existing `services.json` next to the executable (legacy
+> location) is automatically migrated to `~/.pf/services.json`.
 
 ## 🏗️ Architecture
 
@@ -256,12 +299,14 @@ services.json             → Stored services (same directory as executable)
 │   ├── model/service.go     → Service types and status constants
 │   ├── stringutil/normalize.go → Input normalization
 │   ├── version/version.go   → Build version info
-│   ├── storage/storage.go   → Service persistence and groups
+│   ├── storage/storage.go   → Service persistence, groups, rename, migration
+│   ├── configedit/          → $EDITOR bulk-edit + config validation
 │   ├── manager/
-│   │   ├── manager.go       → Service lifecycle management
+│   │   ├── manager.go       → Service lifecycle, health probe, auto-reconnect
 │   │   ├── output.go        → Output classification
-│   │   ├── proc_unix.go     → Unix process groups
-│   │   └── proc_windows.go  → Windows process groups
+│   │   ├── port.go          → Port-listener discovery for targeted cleanup
+│   │   ├── proc_unix.go     → Unix process groups / port cleanup
+│   │   └── proc_windows.go  → Windows process groups / port cleanup
 │   ├── ui/ui.go             → Terminal UI (Bubbletea)
 │   └── cert/
 │       ├── p12.go           → P12 certificate extraction
@@ -271,8 +316,8 @@ services.json             → Stored services (same directory as executable)
 ## 🔧 How It Works
 
 1. **Port Management**: Automatically detects and kills processes using target ports
-2. **Service Storage**: Services saved in `services.json`
-3. **Auto-Reconnection**: Automatically restarts failed connections
+2. **Service Storage**: Services saved in `~/.pf/services.json`
+3. **Auto-Reconnection**: Reconnects when the process exits or kubectl reports a fatal error, using capped exponential backoff — never permanently gives up, and resets backoff after a connection stays healthy. No extra connections are made to your backend.
 4. **Certificate Injection**: For kubectl commands, automatically adds certificate flags
 5. **Process Cleanup**: Proper cleanup of all processes on exit
 
