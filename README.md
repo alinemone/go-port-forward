@@ -258,7 +258,7 @@ validated on save; invalid JSON is rejected and you are offered to reopen and fi
 # Free only the local ports used by your configured services
 pf cleanup
 
-# Kill ALL kubectl/ssh processes on the machine
+# Kill ALL kubectl/ssh processes on the machine (asks for confirmation; -y to skip)
 pf cleanup --all
 ```
 
@@ -268,7 +268,7 @@ When running services:
 
 - **↑↓** / **j k** - Move selection between services
 - **PgUp** / **PgDn** / **mouse wheel** - Scroll the log panel
-- **f** - Toggle the log panel between all services and only the selected service
+- **l** - Toggle the log panel between all services and only the selected service
 - **r** - Restart the selected service
 - **Ctrl+R** - Restart all services
 - **s** - Stop the selected service

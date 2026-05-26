@@ -67,6 +67,25 @@ func TestDeleteService(t *testing.T) {
 	}
 }
 
+func TestDeleteServiceRemovesFromGroups(t *testing.T) {
+	s := newTestStorage(t)
+	s.AddService("auth", "kubectl port-forward svc/auth 8081:80")
+	s.AddService("core", "kubectl port-forward svc/core 8082:80")
+	s.AddGroup("backend", []string{"auth", "core"})
+
+	if err := s.DeleteService("auth"); err != nil {
+		t.Fatalf("DeleteService: %v", err)
+	}
+
+	members, err := s.GetGroupServices("backend")
+	if err != nil {
+		t.Fatalf("GetGroupServices: %v", err)
+	}
+	if len(members) != 1 || members[0] != "core" {
+		t.Fatalf("expected group to be [core] after delete, got %v", members)
+	}
+}
+
 func TestDeleteServiceNotFound(t *testing.T) {
 	s := newTestStorage(t)
 

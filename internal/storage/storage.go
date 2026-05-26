@@ -172,19 +172,31 @@ func (s *Storage) AddService(name, command string) error {
 	return s.saveServices(services)
 }
 
-// حذف سرویس از ذخیره‌سازی
+// حذف سرویس از ذخیره‌سازی (و پاک‌سازی عضویت آن در همه‌ی گروه‌ها)
 func (s *Storage) DeleteService(name string) error {
-	services, err := s.LoadServices()
+	data, err := s.readStorage()
 	if err != nil {
 		return err
 	}
 
-	if _, exists := services[name]; !exists {
+	if _, exists := data.Services[name]; !exists {
 		return fmt.Errorf("service '%s' not found", name)
 	}
 
-	delete(services, name)
-	return s.saveServices(services)
+	delete(data.Services, name)
+
+	// حذف سرویس از عضویت همه‌ی گروه‌ها تا مرجع معلق نماند
+	for groupName, members := range data.Groups {
+		filtered := make([]string, 0, len(members))
+		for _, m := range members {
+			if m != name {
+				filtered = append(filtered, m)
+			}
+		}
+		data.Groups[groupName] = filtered
+	}
+
+	return s.writeStorage(data)
 }
 
 // RenameService تغییر نام سرویس و به‌روزرسانی عضویت آن در گروه‌ها
