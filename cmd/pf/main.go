@@ -253,6 +253,10 @@ func runDeleteCommand(args []string) {
 
 func runCleanupCommand(args []string) {
 	if cleanupWantsAll(args) {
+		if !cleanupWantsYes(args) && !confirm("This will kill ALL kubectl and ssh processes on this machine.") {
+			fmt.Println("Aborted.")
+			return
+		}
 		cleanupAllProcesses()
 		return
 	}
@@ -292,6 +296,26 @@ func cleanupWantsAll(args []string) bool {
 		}
 	}
 	return false
+}
+
+// عبور از تأیید با -y/--yes (برای اسکریپت)
+func cleanupWantsYes(args []string) bool {
+	for _, a := range args {
+		switch strings.ToLower(strings.TrimSpace(a)) {
+		case "-y", "--yes":
+			return true
+		}
+	}
+	return false
+}
+
+// پرسش تأیید بله/خیر (پیش‌فرض خیر)
+func confirm(prompt string) bool {
+	fmt.Printf("%s Continue? [y/N]: ", prompt)
+	var answer string
+	fmt.Scanln(&answer)
+	answer = strings.ToLower(strings.TrimSpace(answer))
+	return answer == "y" || answer == "yes"
 }
 
 // رفتار قدیمی: کشتن همه‌ی پروسه‌های kubectl/ssh ماشین

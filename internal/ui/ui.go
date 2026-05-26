@@ -22,6 +22,14 @@ import (
 
 type tickMsg time.Time
 
+// تیکِ انیمیشن اسپینر هنگام خاموش‌شدن
+type spinnerTickMsg time.Time
+
+// پایان کار خاموش‌شدن (StopAllServices تمام شد)
+type shutdownDoneMsg struct{}
+
+var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
 // نتیجه‌ی ویرایش کانفیگ در ادیتور خارجی
 type editResultMsg struct {
 	ok       bool
@@ -59,6 +67,7 @@ type UI struct {
 	addSelected       map[string]bool
 	editStatus        string
 	logFilterSelected bool // نمایش فقط لاگ سرویسِ انتخاب‌شده
+	spinnerFrame      int  // فریم اسپینر هنگام خاموش‌شدن
 }
 
 const uiTickInterval = 500 * time.Millisecond
@@ -105,6 +114,9 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.KeyMsg:
+		if u.quitting {
+			return u, nil
+		}
 		keyRaw := msg.String()
 		key := keyRaw
 		if keyRaw != " " {
@@ -116,9 +128,9 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		switch key {
 		case "q", "ctrl+c", "esc":
+			// خاموش‌شدن را async انجام بده تا UI بتواند اسپینر «در حال توقف» را نشان دهد
 			u.quitting = true
-			u.manager.StopAllServices()
-			return u, tea.Quit
+			return u, tea.Batch(u.shutdownCmd(), spinnerTick())
 
 		case "up", "k":
 			if u.cursorIndex > 0 {
@@ -159,7 +171,7 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "a":
 			u.enterAddMode()
 
-		case "f":
+		case "l":
 			// سوییچ بین «لاگ همه» و «فقط لاگ سرویسِ انتخاب‌شده»
 			u.logFilterSelected = !u.logFilterSelected
 			u.refreshViewportContent()
@@ -183,7 +195,20 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return u, nil
 
+	case spinnerTickMsg:
+		if u.quitting {
+			u.spinnerFrame++
+			return u, spinnerTick()
+		}
+		return u, nil
+
+	case shutdownDoneMsg:
+		return u, tea.Quit
+
 	case tickMsg:
+		if u.quitting {
+			return u, nil
+		}
 		u.services = u.manager.ListServiceStates()
 		u.ensureCursorInRange()
 		u.refreshViewportContent()
@@ -191,6 +216,21 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return u, cmd
+}
+
+// shutdownCmd توقف همه‌ی سرویس‌ها را در پس‌زمینه انجام می‌دهد تا UI بلوک نشود.
+func (u *UI) shutdownCmd() tea.Cmd {
+	return func() tea.Msg {
+		u.manager.StopAllServices()
+		return shutdownDoneMsg{}
+	}
+}
+
+// spinnerTick تیک بعدی انیمیشن اسپینر
+func spinnerTick() tea.Cmd {
+	return tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
+		return spinnerTickMsg(t)
+	})
 }
 
 // launchEditor کانفیگ فعلی را در ادیتور خارجی باز می‌کند و نتیجه را اعتبارسنجی/ذخیره می‌کند.
@@ -249,7 +289,7 @@ func (u *UI) launchEditor() tea.Cmd {
 // View رندر رابط کاربری
 func (u *UI) View() string {
 	if u.quitting {
-		return renderShutdownScreen()
+		return u.renderShutdownScreen()
 	}
 
 	if !u.ready {
@@ -901,9 +941,9 @@ func renderHelp(width int, logScope string) string {
 		width = 60
 	}
 
-	helpText := fmt.Sprintf("↑↓/j/k: move  •  f: logs=%s  •  a: add  •  r: restart  •  ^r: restart all  •  s: stop  •  e: edit  •  q: quit", logScope)
+	helpText := fmt.Sprintf("↑↓/j/k: move  •  l: logs=%s  •  a: add  •  r: restart  •  ^r: restart all  •  s: stop  •  e: edit  •  q: quit", logScope)
 	if width < 90 {
-		helpText = fmt.Sprintf("↑↓: move  •  f:logs=%s  •  a:add  •  r:restart  •  s:stop  •  e:edit  •  q:quit", logScope)
+		helpText = fmt.Sprintf("↑↓: move  •  l:logs=%s  •  a:add  •  r:restart  •  s:stop  •  e:edit  •  q:quit", logScope)
 	}
 	help := lipgloss.NewStyle().
 		Foreground(colorMuted).
@@ -918,7 +958,9 @@ func renderHelp(width int, logScope string) string {
 	return style.Render(help)
 }
 
-func renderShutdownScreen() string {
+func (u *UI) renderShutdownScreen() string {
+	frame := spinnerFrames[u.spinnerFrame%len(spinnerFrames)]
+
 	shutdownStyle := lipgloss.NewStyle().
 		Foreground(colorAccentAlt).
 		Bold(true)
@@ -927,9 +969,14 @@ func renderShutdownScreen() string {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colorAccentAlt).
 		Padding(1, 4).
-		Align(lipgloss.Center)
+		Align(lipgloss.Center).
+		Render(shutdownStyle.Render(fmt.Sprintf("%s  Stopping services, please wait...", frame)))
 
-	return box.Render(shutdownStyle.Render("✓ Shutting down gracefully..."))
+	// وسط‌چینِ کامل (افقی و عمودی) بر اساس ابعاد فعلی ترمینال
+	if u.width <= 0 || u.height <= 0 {
+		return box
+	}
+	return lipgloss.Place(u.width, u.height, lipgloss.Center, lipgloss.Center, box)
 }
 
 func tickCmd(interval time.Duration) tea.Cmd {
