@@ -12,9 +12,10 @@ import (
 )
 
 // ساختار کامل داده‌های ذخیره‌سازی
+// بدون omitempty تا فایل همیشه ساختار کامل (services + groups) داشته باشد
 type StorageData struct {
-	Services map[string]string   `json:"services,omitempty"`
-	Groups   map[string][]string `json:"groups,omitempty"`
+	Services map[string]string   `json:"services"`
+	Groups   map[string][]string `json:"groups"`
 	Legacy   map[string]string   `json:"-"`
 }
 
@@ -23,13 +24,81 @@ type Storage struct {
 	filePath string
 }
 
-// ساخت نمونه ذخیره‌سازی بر اساس مسیر فایل اجرایی
+// ساخت نمونه ذخیره‌سازی در ~/.pf/services.json با مهاجرت خودکار از مسیر قدیمی
 func NewStorage() *Storage {
-	exe, _ := os.Executable()
-	exeDir := filepath.Dir(exe)
-	return &Storage{
-		filePath: filepath.Join(exeDir, "services.json"),
+	newPath, ok := configStoragePath()
+	if !ok {
+		// fallback: رفتار قدیمی (کنار فایل اجرایی)
+		return &Storage{filePath: legacyStoragePath()}
 	}
+
+	if old := legacyStoragePath(); old != "" {
+		migrateLegacyStorage(newPath, old)
+	}
+
+	return &Storage{filePath: newPath}
+}
+
+// مسیر canonical جدید: ~/.pf/services.json
+func configStoragePath() (string, bool) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", false
+	}
+	configDir := filepath.Join(homeDir, ".pf")
+	if err := os.MkdirAll(configDir, 0700); err != nil {
+		return "", false
+	}
+	return filepath.Join(configDir, "services.json"), true
+}
+
+// مسیر قدیمی کنار فایل اجرایی
+func legacyStoragePath() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(exe), "services.json")
+}
+
+// مهاجرت یک‌باره‌ی فایل قدیمی به مسیر جدید (فقط وقتی مسیر جدید هنوز ساخته نشده)
+func migrateLegacyStorage(newPath, oldPath string) {
+	if newPath == oldPath || oldPath == "" {
+		return
+	}
+	if _, err := os.Stat(newPath); err == nil {
+		return // مسیر جدید از قبل وجود دارد
+	}
+	data, err := os.ReadFile(oldPath)
+	if err != nil {
+		return // فایل قدیمی وجود ندارد یا قابل خواندن نیست
+	}
+	_ = os.WriteFile(newPath, data, 0644)
+}
+
+// Path مسیر فایل ذخیره‌سازی فعلی را برمی‌گرداند
+func (s *Storage) Path() string {
+	return s.filePath
+}
+
+// SaveData کل داده‌ها (سرویس‌ها و گروه‌ها) را روی دیسک ذخیره می‌کند
+func (s *Storage) SaveData(data *StorageData) error {
+	return s.writeStorage(data)
+}
+
+// EnsureExists اگر فایل کانفیگ وجود نداشته باشد، یک اسکلت کامل (services + groups خالی) می‌سازد.
+// برای بار اول نصب: کاربر تازه با اجرای pf یک فایل با ساختار کامل دریافت می‌کند.
+func (s *Storage) EnsureExists() error {
+	if s.filePath == "" {
+		return nil
+	}
+	if _, err := os.Stat(s.filePath); err == nil {
+		return nil // از قبل وجود دارد
+	}
+	return s.writeStorage(&StorageData{
+		Services: make(map[string]string),
+		Groups:   make(map[string][]string),
+	})
 }
 
 // خواندن کامل داده‌ها از دیسک
@@ -118,6 +187,71 @@ func (s *Storage) DeleteService(name string) error {
 	return s.saveServices(services)
 }
 
+// RenameService تغییر نام سرویس و به‌روزرسانی عضویت آن در گروه‌ها
+func (s *Storage) RenameService(oldName, newName string) error {
+	if oldName == newName {
+		return fmt.Errorf("new name is the same as the old name")
+	}
+
+	data, err := s.readStorage()
+	if err != nil {
+		return err
+	}
+
+	command, exists := data.Services[oldName]
+	if !exists {
+		return fmt.Errorf("service '%s' not found", oldName)
+	}
+	if _, exists := data.Services[newName]; exists {
+		return fmt.Errorf("a service with name '%s' already exists", newName)
+	}
+	if _, exists := data.Groups[newName]; exists {
+		return fmt.Errorf("a group with name '%s' already exists", newName)
+	}
+
+	delete(data.Services, oldName)
+	data.Services[newName] = command
+
+	// به‌روزرسانی عضویت سرویس در همه‌ی گروه‌ها
+	for groupName, members := range data.Groups {
+		for i, member := range members {
+			if member == oldName {
+				data.Groups[groupName][i] = newName
+			}
+		}
+	}
+
+	return s.writeStorage(data)
+}
+
+// RenameGroup تغییر نام یک گروه
+func (s *Storage) RenameGroup(oldName, newName string) error {
+	if oldName == newName {
+		return fmt.Errorf("new name is the same as the old name")
+	}
+
+	data, err := s.readStorage()
+	if err != nil {
+		return err
+	}
+
+	members, exists := data.Groups[oldName]
+	if !exists {
+		return fmt.Errorf("group '%s' not found", oldName)
+	}
+	if _, exists := data.Services[newName]; exists {
+		return fmt.Errorf("a service with name '%s' already exists", newName)
+	}
+	if _, exists := data.Groups[newName]; exists {
+		return fmt.Errorf("a group with name '%s' already exists", newName)
+	}
+
+	delete(data.Groups, oldName)
+	data.Groups[newName] = members
+
+	return s.writeStorage(data)
+}
+
 // دریافت فرمان یک سرویس
 func (s *Storage) GetService(name string) (string, error) {
 	services, err := s.LoadServices()
@@ -162,6 +296,65 @@ func (s *Storage) AddGroup(name string, services []string) error {
 	}
 
 	data.Groups[name] = services
+	return s.writeStorage(data)
+}
+
+// AddServicesToGroup سرویس‌ها را به یک گروه موجود اضافه می‌کند (با حذف تکراری‌ها)
+func (s *Storage) AddServicesToGroup(groupName string, services []string) error {
+	data, err := s.readStorage()
+	if err != nil {
+		return err
+	}
+
+	members, exists := data.Groups[groupName]
+	if !exists {
+		return fmt.Errorf("group '%s' not found", groupName)
+	}
+
+	existing := make(map[string]bool, len(members))
+	for _, m := range members {
+		existing[m] = true
+	}
+
+	for _, svc := range services {
+		if _, ok := data.Services[svc]; !ok {
+			return fmt.Errorf("service '%s' not found", svc)
+		}
+		if !existing[svc] {
+			members = append(members, svc)
+			existing[svc] = true
+		}
+	}
+
+	data.Groups[groupName] = members
+	return s.writeStorage(data)
+}
+
+// RemoveServicesFromGroup سرویس‌ها را از یک گروه موجود حذف می‌کند
+func (s *Storage) RemoveServicesFromGroup(groupName string, services []string) error {
+	data, err := s.readStorage()
+	if err != nil {
+		return err
+	}
+
+	members, exists := data.Groups[groupName]
+	if !exists {
+		return fmt.Errorf("group '%s' not found", groupName)
+	}
+
+	toRemove := make(map[string]bool, len(services))
+	for _, svc := range services {
+		toRemove[svc] = true
+	}
+
+	filtered := make([]string, 0, len(members))
+	for _, m := range members {
+		if !toRemove[m] {
+			filtered = append(filtered, m)
+		}
+	}
+
+	data.Groups[groupName] = filtered
 	return s.writeStorage(data)
 }
 

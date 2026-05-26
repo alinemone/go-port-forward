@@ -24,18 +24,37 @@ import (
 
 // runningService نگهداری state اجرایی سرویس (جدا از model.Service)
 type runningService struct {
-	name         string
-	command      string
-	localPort    string
-	status       string
-	lastError    string
-	startTime    time.Time
-	restartCount int
-	logs         []model.LogEntry
-	cancel       context.CancelFunc
-	done         chan struct{}
-	process      *os.Process
-	mu           sync.RWMutex
+	name          string
+	command       string
+	localPort     string
+	status        string
+	lastError     string
+	startTime     time.Time
+	restartCount  int
+	healthySince  time.Time // زمان سالم‌شدن در اجرای فعلی (برای ریست backoff)
+	lastHealthy   time.Time // آخرین باری که سالم بوده
+	lastRunStable bool      // آیا اجرای قبلی به‌اندازه‌ی کافی سالم بود
+	logs          []model.LogEntry
+	cancel        context.CancelFunc
+	done          chan struct{}
+	process       *os.Process
+	mu            sync.RWMutex
+}
+
+// markHealthy وضعیت سرویس را سالم می‌کند و زمان‌های سلامت را به‌روزرسانی می‌کند
+func (s *runningService) markHealthy() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.status != model.StatusHealthy {
+		s.status = model.StatusHealthy
+		s.lastError = ""
+	}
+	now := time.Now()
+	if s.healthySince.IsZero() {
+		s.healthySince = now
+	}
+	s.lastHealthy = now
 }
 
 // تهیه کپی امن از وضعیت سرویس برای UI
@@ -109,6 +128,16 @@ func NewServiceManager(st *storage.Storage) *ServiceManager {
 		storage:     st,
 		certManager: certMgr,
 	}
+}
+
+// ValidateServiceName اعتبارسنجی نام سرویس (نسخه‌ی اکسپورت‌شده برای استفاده در سایر پکیج‌ها)
+func ValidateServiceName(name string) error {
+	return ensureValidServiceName(name)
+}
+
+// ValidateCommand اعتبارسنجی فرمان (نسخه‌ی اکسپورت‌شده برای استفاده در سایر پکیج‌ها)
+func ValidateCommand(command string) error {
+	return ensureValidCommand(command)
 }
 
 // اعتبارسنجی نام سرویس برای امنیت
@@ -213,9 +242,8 @@ func (m *ServiceManager) StartService(ctx context.Context, name string) error {
 	return nil
 }
 
-// حلقه اجرای سرویس با قابلیت اتصال مجدد
+// حلقه اجرای سرویس با اتصال مجدد بی‌نهایت (backoff سقف‌دار + ریست پس از سلامت پایدار)
 func (m *ServiceManager) runServiceLoop(ctx context.Context, svc *runningService) {
-	const maxReconnects = 10
 	const baseBackoff = 2 * time.Second
 	const maxBackoff = 30 * time.Second
 
@@ -227,19 +255,12 @@ func (m *ServiceManager) runServiceLoop(ctx context.Context, svc *runningService
 			return
 		default:
 			if !isFirstRun {
+				// اگر اجرای قبلی به‌اندازه‌ی کافی سالم بود، شمارنده ریست می‌شود
+				// تا یک خطای موقتی بودجه‌ی backoff را تمام نکند.
 				svc.mu.Lock()
-				svc.restartCount++
+				svc.restartCount = nextRestartCount(svc.restartCount, svc.lastRunStable)
 				restartCount := svc.restartCount
 				svc.mu.Unlock()
-
-				if restartCount >= maxReconnects {
-					svc.mu.Lock()
-					svc.status = model.StatusError
-					svc.lastError = fmt.Sprintf("Max reconnect attempts (%d) exceeded", maxReconnects)
-					svc.mu.Unlock()
-					svc.appendLog("MAXIMUM RECONNECT ATTEMPTS REACHED - GIVING UP", true)
-					return
-				}
 
 				backoff := baseBackoff * time.Duration(1<<uint(restartCount-1))
 				if backoff > maxBackoff {
@@ -271,6 +292,7 @@ func (m *ServiceManager) runServiceOnce(ctx context.Context, svc *runningService
 	svc.mu.Lock()
 	svc.status = model.StatusConnecting
 	svc.lastError = ""
+	svc.healthySince = time.Time{}
 	svc.mu.Unlock()
 
 	commandStr := svc.command
@@ -333,8 +355,9 @@ func (m *ServiceManager) runServiceOnce(ctx context.Context, svc *runningService
 
 	err = cmd.Wait()
 
-	// پاک‌سازی رفرنس پروسه
+	// آیا این اجرا به‌اندازه‌ی کافی سالم بود؟ (برای ریست backoff در حلقه)
 	svc.mu.Lock()
+	svc.lastRunStable = !svc.healthySince.IsZero() && time.Since(svc.healthySince) >= healthyResetThreshold
 	svc.process = nil
 	svc.mu.Unlock()
 
@@ -342,6 +365,17 @@ func (m *ServiceManager) runServiceOnce(ctx context.Context, svc *runningService
 		message := fmt.Sprintf("Process died: %v", err)
 		svc.setError(message)
 	}
+}
+
+// آستانه‌ی سلامت پایدار: اگر اتصال این مدت سالم بماند، backoff ریست می‌شود
+const healthyResetThreshold = 30 * time.Second
+
+// nextRestartCount شمارنده‌ی restart بعدی را می‌دهد؛ اگر اجرای قبلی پایدار بوده از ۱ شروع می‌کند.
+func nextRestartCount(prev int, lastRunStable bool) int {
+	if lastRunStable {
+		return 1
+	}
+	return prev + 1
 }
 
 // افزودن فلگ‌های گواهی به فرمان kubectl
@@ -572,12 +606,7 @@ func (m *ServiceManager) streamOutput(svc *runningService, reader io.Reader, isE
 
 		switch classifyOutputLine(line, isError) {
 		case lineKindHealthy:
-			svc.mu.Lock()
-			if svc.status != model.StatusHealthy {
-				svc.status = model.StatusHealthy
-				svc.lastError = ""
-			}
-			svc.mu.Unlock()
+			svc.markHealthy()
 		case lineKindFatalError:
 			message := normalizeErrorLine(line)
 			svc.setError(message)

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -108,8 +109,8 @@ func TestListServiceNames(t *testing.T) {
 
 func TestParsePortsFromCommand(t *testing.T) {
 	tests := []struct {
-		command   string
-		wantLocal string
+		command    string
+		wantLocal  string
 		wantRemote string
 	}{
 		{"kubectl port-forward svc/db 5432:5432", "5432", "5432"},
@@ -172,6 +173,76 @@ func TestGroupOperations(t *testing.T) {
 	_, err = s.GetGroupServices("backend")
 	if err == nil {
 		t.Fatal("expected error after group delete")
+	}
+}
+
+func TestAddServicesToGroup(t *testing.T) {
+	s := newTestStorage(t)
+	s.AddService("auth", "kubectl port-forward svc/auth 8081:80")
+	s.AddService("core", "kubectl port-forward svc/core 8082:80")
+	s.AddService("crm", "kubectl port-forward svc/crm 8083:80")
+	s.AddGroup("backend", []string{"auth"})
+
+	if err := s.AddServicesToGroup("backend", []string{"core", "crm"}); err != nil {
+		t.Fatalf("AddServicesToGroup: %v", err)
+	}
+
+	members, _ := s.GetGroupServices("backend")
+	if len(members) != 3 {
+		t.Fatalf("expected 3 members, got %v", members)
+	}
+}
+
+func TestAddServicesToGroupDedup(t *testing.T) {
+	s := newTestStorage(t)
+	s.AddService("auth", "kubectl port-forward svc/auth 8081:80")
+	s.AddGroup("backend", []string{"auth"})
+
+	if err := s.AddServicesToGroup("backend", []string{"auth"}); err != nil {
+		t.Fatalf("AddServicesToGroup: %v", err)
+	}
+
+	members, _ := s.GetGroupServices("backend")
+	if len(members) != 1 {
+		t.Errorf("expected no duplicate, got %v", members)
+	}
+}
+
+func TestAddServicesToGroupErrors(t *testing.T) {
+	s := newTestStorage(t)
+	s.AddService("auth", "kubectl port-forward svc/auth 8081:80")
+	s.AddGroup("backend", []string{"auth"})
+
+	if err := s.AddServicesToGroup("missing-group", []string{"auth"}); err == nil {
+		t.Error("expected error for nonexistent group")
+	}
+	if err := s.AddServicesToGroup("backend", []string{"ghost"}); err == nil {
+		t.Error("expected error for nonexistent service")
+	}
+}
+
+func TestRemoveServicesFromGroup(t *testing.T) {
+	s := newTestStorage(t)
+	s.AddService("auth", "kubectl port-forward svc/auth 8081:80")
+	s.AddService("core", "kubectl port-forward svc/core 8082:80")
+	s.AddGroup("backend", []string{"auth", "core"})
+
+	if err := s.RemoveServicesFromGroup("backend", []string{"auth"}); err != nil {
+		t.Fatalf("RemoveServicesFromGroup: %v", err)
+	}
+
+	members, _ := s.GetGroupServices("backend")
+	if len(members) != 1 || members[0] != "core" {
+		t.Fatalf("expected [core], got %v", members)
+	}
+
+	// حذف عضو ناموجود → بدون خطا، بدون تغییر
+	if err := s.RemoveServicesFromGroup("backend", []string{"not-a-member"}); err != nil {
+		t.Fatalf("removing non-member should not error: %v", err)
+	}
+
+	if err := s.RemoveServicesFromGroup("missing", []string{"auth"}); err == nil {
+		t.Error("expected error for nonexistent group")
 	}
 }
 
@@ -243,6 +314,92 @@ func TestFindPortConflictsNoConflict(t *testing.T) {
 	}
 	if len(conflicts) != 0 {
 		t.Errorf("expected no conflicts, got %d", len(conflicts))
+	}
+}
+
+func TestEnsureExistsCreatesFullSkeleton(t *testing.T) {
+	s := newTestStorage(t)
+
+	if err := s.EnsureExists(); err != nil {
+		t.Fatalf("EnsureExists: %v", err)
+	}
+
+	raw, err := os.ReadFile(s.filePath)
+	if err != nil {
+		t.Fatalf("file not created: %v", err)
+	}
+
+	// باید هر دو کلید services و groups را داشته باشد
+	if !strings.Contains(string(raw), `"services"`) || !strings.Contains(string(raw), `"groups"`) {
+		t.Errorf("skeleton must contain both keys, got: %s", raw)
+	}
+
+	var sd StorageData
+	if err := json.Unmarshal(raw, &sd); err != nil {
+		t.Fatalf("invalid JSON skeleton: %v", err)
+	}
+	if sd.Services == nil || sd.Groups == nil {
+		t.Errorf("skeleton maps should be non-nil: %s", raw)
+	}
+}
+
+func TestEnsureExistsDoesNotOverwrite(t *testing.T) {
+	s := newTestStorage(t)
+
+	if err := s.AddService("db", "kubectl port-forward svc/db 5432:5432"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.EnsureExists(); err != nil {
+		t.Fatalf("EnsureExists: %v", err)
+	}
+
+	if _, err := s.GetService("db"); err != nil {
+		t.Fatalf("existing data lost after EnsureExists: %v", err)
+	}
+}
+
+func TestMigrateLegacyStorage(t *testing.T) {
+	dir := t.TempDir()
+	oldPath := filepath.Join(dir, "old", "services.json")
+	newPath := filepath.Join(dir, "new", "services.json")
+	if err := os.MkdirAll(filepath.Dir(oldPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(newPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	content := []byte(`{"services":{"db":"kubectl port-forward svc/db 5432:5432"}}`)
+	if err := os.WriteFile(oldPath, content, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	migrateLegacyStorage(newPath, oldPath)
+
+	got, err := os.ReadFile(newPath)
+	if err != nil {
+		t.Fatalf("expected new file created: %v", err)
+	}
+	if string(got) != string(content) {
+		t.Errorf("migrated content = %q, want %q", got, content)
+	}
+}
+
+func TestMigrateLegacyStorageDoesNotOverwrite(t *testing.T) {
+	dir := t.TempDir()
+	oldPath := filepath.Join(dir, "old.json")
+	newPath := filepath.Join(dir, "new.json")
+
+	os.WriteFile(oldPath, []byte(`{"services":{"old":"x"}}`), 0644)
+	existing := []byte(`{"services":{"keep":"y"}}`)
+	os.WriteFile(newPath, existing, 0644)
+
+	migrateLegacyStorage(newPath, oldPath)
+
+	got, _ := os.ReadFile(newPath)
+	if string(got) != string(existing) {
+		t.Errorf("existing new file should not be overwritten, got %q", got)
 	}
 }
 

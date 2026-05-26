@@ -2,7 +2,9 @@ package ui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -11,6 +13,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/alinemone/go-port-forward/internal/configedit"
 	"github.com/alinemone/go-port-forward/internal/manager"
 	"github.com/alinemone/go-port-forward/internal/model"
 	"github.com/alinemone/go-port-forward/internal/storage"
@@ -18,6 +21,15 @@ import (
 )
 
 type tickMsg time.Time
+
+// نتیجه‌ی ویرایش کانفیگ در ادیتور خارجی
+type editResultMsg struct {
+	ok       bool
+	err      error
+	services int
+	groups   int
+	tmpPath  string
+}
 
 // تعریف پالت رنگی برای UI
 var (
@@ -45,6 +57,7 @@ type UI struct {
 	addCandidates []string
 	addCursor     int
 	addSelected   map[string]bool
+	editStatus    string
 }
 
 const uiTickInterval = 500 * time.Millisecond
@@ -85,6 +98,11 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			u.viewport.Height = viewportHeight
 		}
 
+	case tea.MouseMsg:
+		if !u.addMode {
+			u.viewport, cmd = u.viewport.Update(msg)
+		}
+
 	case tea.KeyMsg:
 		keyRaw := msg.String()
 		key := keyRaw
@@ -115,6 +133,10 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				u.viewport, cmd = u.viewport.Update(msg)
 			}
 
+		case "pgup", "pgdown", "home", "end", "ctrl+u", "ctrl+d":
+			// اسکرول مستقیم لاگ‌ها بدون جابه‌جایی انتخاب سرویس
+			u.viewport, cmd = u.viewport.Update(msg)
+
 		case "r":
 			if u.cursorIndex < len(u.services) && len(u.services) > 0 {
 				serviceName := u.services[u.cursorIndex].Name
@@ -134,9 +156,23 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "a":
 			u.enterAddMode()
 
+		case "e":
+			return u, u.launchEditor()
+
 		default:
 			u.viewport, cmd = u.viewport.Update(msg)
 		}
+
+	case editResultMsg:
+		switch {
+		case msg.ok:
+			u.editStatus = fmt.Sprintf("✓ Config saved: %d service(s), %d group(s) — affects future runs", msg.services, msg.groups)
+		case msg.tmpPath != "":
+			u.editStatus = fmt.Sprintf("✗ Invalid config: %v — edits kept at %s (use 'pf edit' to fix)", msg.err, msg.tmpPath)
+		case msg.err != nil:
+			u.editStatus = fmt.Sprintf("✗ Edit failed: %v", msg.err)
+		}
+		return u, nil
 
 	case tickMsg:
 		u.services = u.manager.ListServiceStates()
@@ -146,6 +182,59 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return u, cmd
+}
+
+// launchEditor کانفیگ فعلی را در ادیتور خارجی باز می‌کند و نتیجه را اعتبارسنجی/ذخیره می‌کند.
+func (u *UI) launchEditor() tea.Cmd {
+	st := storage.NewStorage()
+	services, _ := st.LoadServices()
+	groups, _ := st.ListGroups()
+
+	seed, err := json.MarshalIndent(&storage.StorageData{Services: services, Groups: groups}, "", "  ")
+	if err != nil {
+		return func() tea.Msg { return editResultMsg{err: err} }
+	}
+
+	tmp, err := os.CreateTemp("", "pf-config-*.json")
+	if err != nil {
+		return func() tea.Msg { return editResultMsg{err: err} }
+	}
+	tmpPath := tmp.Name()
+	tmp.Write(seed)
+	tmp.Close()
+
+	cmd, err := configedit.EditorCommand(tmpPath)
+	if err != nil {
+		os.Remove(tmpPath)
+		return func() tea.Msg { return editResultMsg{err: err} }
+	}
+
+	return tea.ExecProcess(cmd, func(runErr error) tea.Msg {
+		if runErr != nil {
+			os.Remove(tmpPath)
+			return editResultMsg{err: runErr}
+		}
+
+		edited, err := os.ReadFile(tmpPath)
+		if err != nil {
+			os.Remove(tmpPath)
+			return editResultMsg{err: err}
+		}
+
+		validated, err := configedit.Validate(edited)
+		if err != nil {
+			// temp را نگه می‌داریم تا ویرایش‌ها گم نشوند
+			return editResultMsg{err: err, tmpPath: tmpPath}
+		}
+
+		if err := st.SaveData(validated); err != nil {
+			os.Remove(tmpPath)
+			return editResultMsg{err: err}
+		}
+
+		os.Remove(tmpPath)
+		return editResultMsg{ok: true, services: len(validated.Services), groups: len(validated.Groups)}
+	})
 }
 
 // View رندر رابط کاربری
@@ -181,6 +270,14 @@ func (u *UI) View() string {
 		Width(logBoxWidth).
 		Render(u.viewport.View())
 	sections = append(sections, logBox)
+
+	if u.editStatus != "" {
+		statusColor := colorAccentAlt
+		if strings.HasPrefix(u.editStatus, "✗") {
+			statusColor = colorError
+		}
+		sections = append(sections, lipgloss.NewStyle().Foreground(statusColor).Render(u.editStatus))
+	}
 
 	sections = append(sections, renderHelp(u.width))
 	return lipgloss.JoinVertical(lipgloss.Left, sections...)
@@ -281,9 +378,14 @@ func (u *UI) refreshViewportContent() {
 		contentWidth = 40
 	}
 
+	// فقط وقتی کاربر ته صفحه است لاگ‌های جدید را دنبال کن؛
+	// اگر بالا اسکرول کرده، موقعیتش حفظ می‌شود و با رندر مجدد نمی‌پرد.
+	follow := u.viewport.AtBottom()
 	newContent := renderLogsContent(u.services, contentWidth)
 	u.viewport.SetContent(newContent)
-	u.viewport.GotoBottom()
+	if follow {
+		u.viewport.GotoBottom()
+	}
 }
 
 func (u *UI) ensureViewportSize() {
@@ -768,9 +870,9 @@ func renderHelp(width int) string {
 		width = 60
 	}
 
-	helpText := "↑↓/j/k: move  •  a: add  •  r: restart  •  ctrl+r: restart all  •  s: stop  •  q/esc: quit"
+	helpText := "↑↓/j/k: move  •  a: add  •  r: restart  •  ^r: restart all  •  s: stop  •  e: edit  •  q: quit"
 	if width < 90 {
-		helpText = "↑↓: move  •  a:add  •  r:restart  •  ^r:restart all  •  s:stop  •  q:quit"
+		helpText = "↑↓: move  •  a:add  •  r:restart  •  s:stop  •  e:edit  •  q:quit"
 	}
 	help := lipgloss.NewStyle().
 		Foreground(colorMuted).

@@ -185,6 +185,20 @@ func TestEnsureValidCommand(t *testing.T) {
 	}
 }
 
+func TestNextRestartCount(t *testing.T) {
+	// اجرای ناپایدار → افزایش
+	if got := nextRestartCount(0, false); got != 1 {
+		t.Errorf("nextRestartCount(0,false) = %d, want 1", got)
+	}
+	if got := nextRestartCount(5, false); got != 6 {
+		t.Errorf("nextRestartCount(5,false) = %d, want 6", got)
+	}
+	// اجرای پایدار → ریست به ۱
+	if got := nextRestartCount(9, true); got != 1 {
+		t.Errorf("nextRestartCount(9,true) = %d, want 1", got)
+	}
+}
+
 func TestAddKubectlCertFlags(t *testing.T) {
 	cmd := "kubectl port-forward svc/db 5432:5432"
 	result := addKubectlCertFlags(cmd, "/tmp/cert.pem", "/tmp/key.pem")
