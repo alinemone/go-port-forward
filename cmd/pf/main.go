@@ -19,12 +19,16 @@ import (
 	"github.com/alinemone/go-port-forward/internal/storage"
 	"github.com/alinemone/go-port-forward/internal/stringutil"
 	"github.com/alinemone/go-port-forward/internal/ui"
+	"github.com/alinemone/go-port-forward/internal/updater"
 	"github.com/alinemone/go-port-forward/internal/version"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
 
 func main() {
+	// پاک کردن باینری قدیمی از آپدیت قبلی (فقط روی ویندوز کاری انجام می‌ده)
+	updater.CleanupStaleArtifacts()
+
 	// اطمینان از وجود فایل کانفیگ با ساختار کامل (services + groups) — مخصوصاً بار اول نصب
 	storage.NewStorage().EnsureExists()
 
@@ -63,6 +67,8 @@ func main() {
 		showUsage()
 	case "v", "version":
 		runVersionCommand()
+	case "u", "update":
+		runUpdateCommand(args)
 	default:
 		fmt.Printf("Unknown command: %s\n", cmd)
 		fmt.Println("Run 'pf help' for usage")
@@ -745,6 +751,7 @@ func showUsage() {
 	helpCmd("cert <subcommand>", "Manage certificate (add/list/remove)")
 	helpCmd("edit", "Bulk-edit all services/groups in $EDITOR")
 	helpCmd("v, version", "Show build version details")
+	helpCmd("u, update [--yes|--force]", "Update pf to the latest GitHub release")
 	helpCmd("h, help", "Show this help")
 	fmt.Println()
 
@@ -881,6 +888,47 @@ func runVersionCommand() {
 	fmt.Printf("pf %s\n", version.Version)
 	fmt.Printf("commit: %s\n", version.Commit)
 	fmt.Printf("built: %s\n", version.BuildDate)
+}
+
+func runUpdateCommand(args []string) {
+	opts := updater.Options{CurrentVersion: version.Version}
+	for _, a := range args {
+		switch strings.ToLower(strings.TrimSpace(a)) {
+		case "-y", "--yes":
+			opts.AssumeYes = true
+		case "-f", "--force":
+			opts.Force = true
+		case "-h", "--help":
+			showUpdateUsage()
+			return
+		default:
+			fmt.Printf("Unknown flag for update: %s\n", a)
+			showUpdateUsage()
+			os.Exit(1)
+		}
+	}
+
+	if err := updater.Run(opts); err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func showUpdateUsage() {
+	help := `
+Update:
+  pf update                Download the latest release for this OS/arch and replace this binary in-place
+  pf update --yes          Skip confirmation prompt (for scripts)
+  pf update --force        Re-install even if already on the latest version
+
+Notes:
+  • The binary's current path is auto-detected via os.Executable(), so this works
+    no matter where you placed pf on disk (any directory on PATH is fine).
+  • On Windows the running pf.exe is renamed to pf.exe.old and cleaned up on next launch.
+  • If the install directory is not writable, pf will try to relaunch itself with
+    sudo (Linux/macOS) or trigger a UAC prompt (Windows).
+`
+	fmt.Println(help)
 }
 
 type runTargetStore interface {
