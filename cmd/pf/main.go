@@ -22,7 +22,7 @@ import (
 	"github.com/alinemone/go-port-forward/internal/updater"
 	"github.com/alinemone/go-port-forward/internal/version"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 func main() {
@@ -182,7 +182,8 @@ func runStartCommand(args []string) {
 
 	// Start UI immediately
 	u := ui.NewUI(mgr, ctx)
-	program := tea.NewProgram(u, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	// در v2، alt-screen و حالت ماوس به‌صورت declarative داخل View() ست می‌شوند
+	program := tea.NewProgram(u)
 
 	// Start all services in parallel - they will appear in UI as they connect
 	for _, name := range serviceNames {

@@ -4,15 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"image/color"
 	"os"
 	"sort"
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/alinemone/go-port-forward/internal/configedit"
 	"github.com/alinemone/go-port-forward/internal/manager"
@@ -48,13 +49,15 @@ type editResultMsg struct {
 
 // تعریف پالت رنگی برای UI
 var (
-	colorText      = lipgloss.Color("#E6E6E6")
-	colorMuted     = lipgloss.Color("#8A94A6")
-	colorBorder    = lipgloss.Color("#2E3A4A")
-	colorAccent    = lipgloss.Color("#4DD4FF")
-	colorAccentAlt = lipgloss.Color("#6FFFB0")
-	colorWarn      = lipgloss.Color("#FFE66D")
-	colorError     = lipgloss.Color("#FF6B6B")
+	colorText      = lipgloss.Color("#EAEEF5") // متن اصلی روشن
+	colorMuted     = lipgloss.Color("#7C879B") // متن کم‌رنگ/توضیحات
+	colorBorder    = lipgloss.Color("#33415A") // قاب‌ها و جداکننده‌ها
+	colorAccent    = lipgloss.Color("#5BD4FF") // لهجه‌ی اصلی (آبی فیروزه‌ای)
+	colorAccentAlt = lipgloss.Color("#73FFB6") // لهجه‌ی دوم (سبز نعنایی)
+	colorWarn      = lipgloss.Color("#FFD166") // هشدار/در حال اتصال
+	colorError     = lipgloss.Color("#FF6B6B") // خطا
+	colorHeading   = lipgloss.Color("#AEB9CC") // سرستون جدول‌ها
+	colorSelected  = lipgloss.Color("#1E3A5F") // پس‌زمینه‌ی ردیف انتخاب‌شده
 )
 
 // مدل اصلی UI
@@ -98,11 +101,9 @@ func NewUI(mgr *manager.ServiceManager, ctx context.Context) *UI {
 }
 
 // Init مقداردهی اولیه مدل Bubble Tea
+// در v2، ورود به alt-screen دیگر دستوری نیست و داخل View() تنظیم می‌شود.
 func (u *UI) Init() tea.Cmd {
-	return tea.Batch(
-		tickCmd(uiTickInterval),
-		tea.EnterAltScreen,
-	)
+	return tickCmd(uiTickInterval)
 }
 
 // Update مدیریت رویدادها و به‌روزرسانی وضعیت UI
@@ -116,24 +117,24 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		viewportHeight := calculateViewportHeight(len(u.services), u.height)
 		if !u.ready {
-			u.viewport = viewport.New(msg.Width, viewportHeight)
+			u.viewport = viewport.New(viewport.WithWidth(msg.Width), viewport.WithHeight(viewportHeight))
 			u.viewport.YPosition = 0
 			u.ready = true
 		} else {
-			u.viewport.Width = msg.Width
-			u.viewport.Height = viewportHeight
+			u.viewport.SetWidth(msg.Width)
+			u.viewport.SetHeight(viewportHeight)
 		}
 
-	case tea.MouseMsg:
+	case tea.MouseWheelMsg:
 		if u.addMode {
 			// در overlay لیست سرویس‌ها (نه فرم) با چرخ ماوس بین کاندیداها حرکت کن
 			if u.addFormMode == "" {
 				switch msg.Button {
-				case tea.MouseButtonWheelUp:
+				case tea.MouseWheelUp:
 					if u.addCursor > 0 {
 						u.addCursor--
 					}
-				case tea.MouseButtonWheelDown:
+				case tea.MouseWheelDown:
 					if u.addCursor < len(u.addCandidates)-1 {
 						u.addCursor++
 					}
@@ -143,13 +144,13 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			u.viewport, cmd = u.viewport.Update(msg)
 		}
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		if u.quitting {
 			return u, nil
 		}
 		keyRaw := msg.String()
 		key := keyRaw
-		if keyRaw != " " {
+		if keyRaw != "space" {
 			key = stringutil.NormalizeToken(keyRaw)
 		}
 		if u.addMode {
@@ -341,8 +342,17 @@ func (u *UI) launchEditor() tea.Cmd {
 	})
 }
 
-// View رندر رابط کاربری
-func (u *UI) View() string {
+// View رندر رابط کاربری — در v2 یک tea.View برمی‌گرداند و alt-screen/حالت ماوس
+// به‌صورت declarative روی همان View تنظیم می‌شوند.
+func (u *UI) View() tea.View {
+	v := tea.NewView(u.viewContent())
+	v.AltScreen = true
+	v.MouseMode = tea.MouseModeCellMotion
+	return v
+}
+
+// viewContent محتوای متنی رابط را می‌سازد (منطق رندر مستقل از تنظیمات ترمینال).
+func (u *UI) viewContent() string {
 	if u.quitting {
 		return u.renderShutdownScreen()
 	}
@@ -437,7 +447,7 @@ func (u *UI) updateAddMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	keyRaw := msg.String()
 	key := keyRaw
-	if keyRaw != " " {
+	if keyRaw != "space" {
 		key = stringutil.NormalizeToken(keyRaw)
 	}
 	switch key {
@@ -451,7 +461,7 @@ func (u *UI) updateAddMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if u.addCursor < len(u.addCandidates)-1 {
 			u.addCursor++
 		}
-	case " ":
+	case "space":
 		if u.addCursor >= 0 && u.addCursor < len(u.addCandidates) {
 			serviceName := u.addCandidates[u.addCursor]
 			if !u.runningNameSet()[serviceName] {
@@ -482,7 +492,7 @@ func newServiceTextInput(placeholder, value string) textinput.Model {
 	ti := textinput.New()
 	ti.Placeholder = placeholder
 	ti.CharLimit = 1000
-	ti.Width = 64
+	ti.SetWidth(64)
 	if value != "" {
 		ti.SetValue(value)
 	}
@@ -545,7 +555,7 @@ func (u *UI) toggleAddFormFocus() tea.Cmd {
 func (u *UI) updateAddForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	keyRaw := msg.String()
 	key := keyRaw
-	if keyRaw != " " {
+	if keyRaw != "space" {
 		key = stringutil.NormalizeToken(keyRaw)
 	}
 
@@ -720,7 +730,7 @@ func (u *UI) refreshViewportContent() {
 	}
 
 	u.ensureViewportSize()
-	contentWidth := u.viewport.Width - 4
+	contentWidth := u.viewport.Width() - 4
 	if contentWidth < 40 {
 		contentWidth = 40
 	}
@@ -763,11 +773,11 @@ func (u *UI) ensureViewportSize() {
 	}
 
 	viewportHeight := calculateViewportHeight(len(u.services), u.height)
-	if u.viewport.Height != viewportHeight {
-		u.viewport.Height = viewportHeight
+	if u.viewport.Height() != viewportHeight {
+		u.viewport.SetHeight(viewportHeight)
 	}
-	if u.viewport.Width != u.width {
-		u.viewport.Width = u.width
+	if u.viewport.Width() != u.width {
+		u.viewport.SetWidth(u.width)
 	}
 }
 
@@ -879,7 +889,7 @@ func renderServiceTable(services []model.Service, selectedIndex, offset, maxVisi
 		)
 	}
 	header := lipgloss.NewStyle().
-		Foreground(colorText).
+		Foreground(colorHeading).
 		Bold(true).
 		Render(headerLine)
 	rows = append(rows, header)
@@ -891,15 +901,16 @@ func renderServiceTable(services []model.Service, selectedIndex, offset, maxVisi
 	if sepWidth > 200 {
 		sepWidth = 200
 	}
-	rows = append(rows, strings.Repeat("─", sepWidth))
+	rows = append(rows, lipgloss.NewStyle().Foreground(colorBorder).Render(strings.Repeat("─", sepWidth)))
 
 	for i := start; i < end; i++ {
 		svc := &services[i]
 		var statusIcon, statusText string
-		var statusColor lipgloss.Color
+		var statusColor color.Color
 
+		selected := i == selectedIndex
 		highlight := "  "
-		if i == selectedIndex {
+		if selected {
 			highlight = "► "
 		}
 
@@ -930,8 +941,12 @@ func renderServiceTable(services []model.Service, selectedIndex, offset, maxVisi
 		portStr := fmt.Sprintf("%-*s", portWidth, svc.LocalPort)
 		restarts := fmt.Sprintf("%-*d", restartWidth, svc.RestartCount)
 
+		nameColor := colorText
+		if selected {
+			nameColor = colorAccent
+		}
 		styledName := lipgloss.NewStyle().
-			Foreground(colorText).
+			Foreground(nameColor).
 			Bold(true).
 			Render(name)
 
@@ -951,7 +966,12 @@ func renderServiceTable(services []model.Service, selectedIndex, offset, maxVisi
 			Foreground(colorText).
 			Render(portStr)
 
-		row := highlight + styledName + "  " + styledStatus
+		marker := highlight
+		if selected {
+			marker = lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render(highlight)
+		}
+
+		row := marker + styledName + "  " + styledStatus
 		if compact {
 			row += "  " + styledPort
 		} else {
@@ -1204,7 +1224,7 @@ func (u *UI) renderAddServiceOverlay() string {
 	rows := make([]string, 0, len(u.addCandidates)+3)
 	headerName := fmt.Sprintf("%-*s", maxNameLen, "SERVICE")
 	header := lipgloss.NewStyle().
-		Foreground(colorText).
+		Foreground(colorHeading).
 		Bold(true).
 		Render(headerName + "  SELECT")
 	rows = append(rows, header)
@@ -1216,7 +1236,7 @@ func (u *UI) renderAddServiceOverlay() string {
 	if sepWidth > 200 {
 		sepWidth = 200
 	}
-	rows = append(rows, strings.Repeat("─", sepWidth))
+	rows = append(rows, lipgloss.NewStyle().Foreground(colorBorder).Render(strings.Repeat("─", sepWidth)))
 
 	if len(u.addCandidates) == 0 {
 		rows = append(rows, lipgloss.NewStyle().
@@ -1226,9 +1246,10 @@ func (u *UI) renderAddServiceOverlay() string {
 	}
 
 	for i, serviceName := range u.addCandidates {
+		selected := i == u.addCursor
 		highlight := "  "
-		if i == u.addCursor {
-			highlight = "► "
+		if selected {
+			highlight = lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("► ")
 		}
 
 		displayName := serviceName
@@ -1236,8 +1257,12 @@ func (u *UI) renderAddServiceOverlay() string {
 			displayName = displayName[:maxNameLen-3] + "..."
 		}
 		name := fmt.Sprintf("%-*s", maxNameLen, displayName)
+		nameColor := colorText
+		if selected {
+			nameColor = colorAccent
+		}
 		styledName := lipgloss.NewStyle().
-			Foreground(colorText).
+			Foreground(nameColor).
 			Bold(true).
 			Render(name)
 
@@ -1342,13 +1367,37 @@ func renderHelp(width int, logScope string) string {
 		width = 60
 	}
 
-	helpText := fmt.Sprintf("↑↓/j/k: move  •  l: logs=%s  •  a: add/edit  •  c: config  •  r: restart  •  ^r: restart all  •  s: stop  •  q: quit", logScope)
-	if width < 90 {
-		helpText = fmt.Sprintf("↑↓: move  •  l:logs=%s  •  a:add/edit  •  c:config  •  r:restart  •  s:stop  •  q:quit", logScope)
+	keyStyle := lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
+	descStyle := lipgloss.NewStyle().Foreground(colorMuted)
+	sep := descStyle.Render("  •  ")
+	chip := func(k, d string) string {
+		return keyStyle.Render(k) + descStyle.Render(" "+d)
 	}
-	help := lipgloss.NewStyle().
-		Foreground(colorMuted).
-		Render(helpText)
+
+	var chips []string
+	if width < 90 {
+		chips = []string{
+			chip("↑↓", "move"),
+			chip("l", "logs="+logScope),
+			chip("a", "add"),
+			chip("c", "config"),
+			chip("r", "restart"),
+			chip("s", "stop"),
+			chip("q", "quit"),
+		}
+	} else {
+		chips = []string{
+			chip("↑↓/j/k", "move"),
+			chip("l", "logs="+logScope),
+			chip("a", "add/edit"),
+			chip("c", "config"),
+			chip("r", "restart"),
+			chip("^r", "restart all"),
+			chip("s", "stop"),
+			chip("q", "quit"),
+		}
+	}
+	help := strings.Join(chips, sep)
 
 	style := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
