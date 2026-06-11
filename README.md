@@ -86,8 +86,8 @@ Modern CLI tool for managing multiple port-forward connections with real-time mo
 #### Windows (PowerShell)
 ```powershell
 go build -trimpath -buildvcs=false -ldflags="-s -w -X github.com/alinemone/go-port-forward/internal/version.Version=dev -X github.com/alinemone/go-port-forward/internal/version.Commit=local -X github.com/alinemone/go-port-forward/internal/version.BuildDate=local" -o pf.exe ./cmd/pf
-# Optional: Move to a directory in PATH
 ```
+#### Optional: Move build file to a directory in Windows PATH
 
 #### Windows EXE Icon (release build)
 

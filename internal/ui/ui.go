@@ -83,6 +83,7 @@ type UI struct {
 	editStatusSeq     int  // شناسه‌ی نسخه‌ی پیام وضعیت برای پاک‌سازی خودکار امن
 	logFilterSelected bool // نمایش فقط لاگ سرویسِ انتخاب‌شده
 	spinnerFrame      int  // فریم اسپینر هنگام خاموش‌شدن
+	tableOffset       int  // ایندکس شروعِ پنجره‌ی اسکرول جدول سرویس‌ها
 }
 
 const uiTickInterval = 500 * time.Millisecond
@@ -124,7 +125,21 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.MouseMsg:
-		if !u.addMode {
+		if u.addMode {
+			// در overlay لیست سرویس‌ها (نه فرم) با چرخ ماوس بین کاندیداها حرکت کن
+			if u.addFormMode == "" {
+				switch msg.Button {
+				case tea.MouseButtonWheelUp:
+					if u.addCursor > 0 {
+						u.addCursor--
+					}
+				case tea.MouseButtonWheelDown:
+					if u.addCursor < len(u.addCandidates)-1 {
+						u.addCursor++
+					}
+				}
+			}
+		} else {
 			u.viewport, cmd = u.viewport.Update(msg)
 		}
 
@@ -185,6 +200,9 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "a":
 			u.enterAddMode()
+
+		case "c":
+			return u, u.launchEditor()
 
 		case "l":
 			// سوییچ بین «لاگ همه» و «فقط لاگ سرویسِ انتخاب‌شده»
@@ -346,7 +364,9 @@ func (u *UI) View() string {
 	if len(u.services) == 0 {
 		sections = append(sections, renderEmptyState())
 	} else {
-		sections = append(sections, renderServiceTable(u.services, u.cursorIndex, u.width))
+		maxVis := maxVisibleServices(u.height)
+		u.ensureCursorVisible(maxVis)
+		sections = append(sections, renderServiceTable(u.services, u.cursorIndex, u.tableOffset, maxVis, u.width))
 	}
 
 	logBoxWidth := u.width - 2
@@ -654,6 +674,46 @@ func (u *UI) ensureCursorInRange() {
 	}
 }
 
+// maxVisibleServices سقف تعداد ردیف‌های قابل‌نمایش جدول سرویس‌ها را بر اساس ارتفاع ترمینال برمی‌گرداند
+// تا جدول کل صفحه را اشغال نکند و فضا برای لاگ‌ها بماند.
+func maxVisibleServices(totalHeight int) int {
+	if totalHeight <= 0 {
+		return 8 // پیش‌فرض معقول پیش از دریافت ابعاد
+	}
+	cap := totalHeight / 3
+	if cap < 3 {
+		cap = 3
+	}
+	if cap > 15 {
+		cap = 15
+	}
+	return cap
+}
+
+// ensureCursorVisible offset پنجره‌ی جدول را طوری تنظیم می‌کند که کرسر همیشه داخل پنجره بماند.
+func (u *UI) ensureCursorVisible(maxVisible int) {
+	if maxVisible <= 0 {
+		u.tableOffset = 0
+		return
+	}
+	if u.cursorIndex < u.tableOffset {
+		u.tableOffset = u.cursorIndex
+	}
+	if u.cursorIndex >= u.tableOffset+maxVisible {
+		u.tableOffset = u.cursorIndex - maxVisible + 1
+	}
+	maxOffset := len(u.services) - maxVisible
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if u.tableOffset > maxOffset {
+		u.tableOffset = maxOffset
+	}
+	if u.tableOffset < 0 {
+		u.tableOffset = 0
+	}
+}
+
 func (u *UI) refreshViewportContent() {
 	if !u.ready {
 		return
@@ -712,9 +772,17 @@ func (u *UI) ensureViewportSize() {
 }
 
 func calculateViewportHeight(serviceCount, totalHeight int) int {
-	tableLines := 4 + serviceCount
+	visible := serviceCount
+	maxVis := maxVisibleServices(totalHeight)
+	if visible > maxVis {
+		visible = maxVis
+	}
+	tableLines := 4 + visible
 	if serviceCount == 0 {
 		tableLines = 1
+	}
+	if serviceCount > maxVis {
+		tableLines++ // خط نشانگر اسکرول جدول
 	}
 	overhead := tableLines + 2 + 3
 	viewportHeight := totalHeight - overhead
@@ -731,9 +799,22 @@ func renderEmptyState() string {
 	return emptyStyle.Render("⚬ No services running...")
 }
 
-func renderServiceTable(services []model.Service, selectedIndex int, width int) string {
+func renderServiceTable(services []model.Service, selectedIndex, offset, maxVisible, width int) string {
 	if width < 60 {
 		width = 60
+	}
+
+	// محدوده‌ی پنجره‌ی قابل‌نمایش
+	if maxVisible <= 0 {
+		maxVisible = len(services)
+	}
+	start := offset
+	if start < 0 {
+		start = 0
+	}
+	end := start + maxVisible
+	if end > len(services) {
+		end = len(services)
 	}
 
 	compact := width < 90
@@ -812,7 +893,7 @@ func renderServiceTable(services []model.Service, selectedIndex int, width int) 
 	}
 	rows = append(rows, strings.Repeat("─", sepWidth))
 
-	for i := range services {
+	for i := start; i < end; i++ {
 		svc := &services[i]
 		var statusIcon, statusText string
 		var statusColor lipgloss.Color
@@ -877,6 +958,16 @@ func renderServiceTable(services []model.Service, selectedIndex int, width int) 
 			row += "  " + styledUptime + "  " + styledPort + "  " + styledRestarts
 		}
 		rows = append(rows, row)
+	}
+
+	// خط نشانگر اسکرول وقتی همه‌ی سرویس‌ها در پنجره جا نمی‌شوند
+	if len(services) > maxVisible {
+		above := start
+		below := len(services) - end
+		indicator := fmt.Sprintf("↑ %d above • ↓ %d below  (%d–%d of %d)", above, below, start+1, end, len(services))
+		rows = append(rows, lipgloss.NewStyle().
+			Foreground(colorMuted).
+			Render(indicator))
 	}
 
 	table := lipgloss.JoinVertical(lipgloss.Left, rows...)
@@ -1251,9 +1342,9 @@ func renderHelp(width int, logScope string) string {
 		width = 60
 	}
 
-	helpText := fmt.Sprintf("↑↓/j/k: move  •  l: logs=%s  •  a: add/edit  •  r: restart  •  ^r: restart all  •  s: stop  •  q: quit", logScope)
+	helpText := fmt.Sprintf("↑↓/j/k: move  •  l: logs=%s  •  a: add/edit  •  c: config  •  r: restart  •  ^r: restart all  •  s: stop  •  q: quit", logScope)
 	if width < 90 {
-		helpText = fmt.Sprintf("↑↓: move  •  l:logs=%s  •  a:add/edit  •  r:restart  •  s:stop  •  q:quit", logScope)
+		helpText = fmt.Sprintf("↑↓: move  •  l:logs=%s  •  a:add/edit  •  c:config  •  r:restart  •  s:stop  •  q:quit", logScope)
 	}
 	help := lipgloss.NewStyle().
 		Foreground(colorMuted).
