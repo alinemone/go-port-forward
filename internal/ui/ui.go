@@ -125,6 +125,13 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			u.viewport.SetHeight(viewportHeight)
 		}
 
+		// اگر فرم افزودن/ویرایش باز است، عرض ورودی‌ها با ترمینال هماهنگ شود
+		if u.addMode && u.addFormMode != "" {
+			inputWidth := u.formInputWidth()
+			u.addFormName.SetWidth(inputWidth)
+			u.addFormCmd.SetWidth(inputWidth)
+		}
+
 	case tea.MouseWheelMsg:
 		if u.addMode {
 			// در overlay لیست سرویس‌ها (نه فرم) با چرخ ماوس بین کاندیداها حرکت کن
@@ -487,12 +494,22 @@ func (u *UI) updateAddMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return u, nil
 }
 
-// newServiceTextInput یک فیلد ورودی متنی آماده می‌سازد
-func newServiceTextInput(placeholder, value string) textinput.Model {
+func (u *UI) formInputWidth() int {
+	if u.width <= 0 {
+		return 64
+	}
+	w := u.width - 11
+	if w < 20 {
+		w = 20
+	}
+	return w
+}
+
+func newServiceTextInput(placeholder, value string, width int) textinput.Model {
 	ti := textinput.New()
 	ti.Placeholder = placeholder
 	ti.CharLimit = 1000
-	ti.SetWidth(64)
+	ti.SetWidth(width)
 	if value != "" {
 		ti.SetValue(value)
 	}
@@ -504,8 +521,9 @@ func (u *UI) openNewServiceForm() tea.Cmd {
 	u.addFormMode = "new"
 	u.addFormOrig = ""
 	u.addFormErr = ""
-	u.addFormName = newServiceTextInput("e.g. db", "")
-	u.addFormCmd = newServiceTextInput("e.g. kubectl port-forward service/postgres 5432:5432", "")
+	inputWidth := u.formInputWidth()
+	u.addFormName = newServiceTextInput("e.g. db", "", inputWidth)
+	u.addFormCmd = newServiceTextInput("e.g. kubectl port-forward service/postgres 5432:5432", "", inputWidth)
 	u.addFormFocus = 0
 	u.addFormCmd.Blur()
 	return u.addFormName.Focus()
@@ -524,8 +542,9 @@ func (u *UI) openEditServiceForm() tea.Cmd {
 	u.addFormMode = "edit"
 	u.addFormOrig = name
 	u.addFormErr = ""
-	u.addFormName = newServiceTextInput("service name", name)
-	u.addFormCmd = newServiceTextInput("command", command)
+	inputWidth := u.formInputWidth()
+	u.addFormName = newServiceTextInput("service name", name, inputWidth)
+	u.addFormCmd = newServiceTextInput("command", command, inputWidth)
 	u.addFormFocus = 0
 	u.addFormCmd.Blur()
 	return u.addFormName.Focus()
