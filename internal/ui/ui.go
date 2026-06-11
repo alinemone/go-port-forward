@@ -24,21 +24,16 @@ import (
 
 type tickMsg time.Time
 
-// تیکِ انیمیشن اسپینر هنگام خاموش‌شدن
 type spinnerTickMsg time.Time
 
-// پایان کار خاموش‌شدن (StopAllServices تمام شد)
 type shutdownDoneMsg struct{}
 
-// درخواست پاک‌سازی خودکار پیام وضعیت پس از مدتی
 type clearStatusMsg struct{ seq int }
 
-// مدت ماندگاری پیام وضعیت پیش از پاک‌سازی خودکار
 const statusClearDelay = 5 * time.Second
 
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
-// نتیجه‌ی ویرایش کانفیگ در ادیتور خارجی
 type editResultMsg struct {
 	ok       bool
 	err      error
@@ -47,52 +42,57 @@ type editResultMsg struct {
 	tmpPath  string
 }
 
-// تعریف پالت رنگی برای UI
 var (
-	colorText      = lipgloss.Color("#EAEEF5") // متن اصلی روشن
-	colorMuted     = lipgloss.Color("#7C879B") // متن کم‌رنگ/توضیحات
-	colorBorder    = lipgloss.Color("#33415A") // قاب‌ها و جداکننده‌ها
-	colorAccent    = lipgloss.Color("#5BD4FF") // لهجه‌ی اصلی (آبی فیروزه‌ای)
-	colorAccentAlt = lipgloss.Color("#73FFB6") // لهجه‌ی دوم (سبز نعنایی)
-	colorWarn      = lipgloss.Color("#FFD166") // هشدار/در حال اتصال
-	colorError     = lipgloss.Color("#FF6B6B") // خطا
-	colorHeading   = lipgloss.Color("#AEB9CC") // سرستون جدول‌ها
-	colorSelected  = lipgloss.Color("#1E3A5F") // پس‌زمینه‌ی ردیف انتخاب‌شده
+	colorText      = lipgloss.Color("#EAEEF5")
+	colorMuted     = lipgloss.Color("#7C879B")
+	colorBorder    = lipgloss.Color("#33415A")
+	colorAccent    = lipgloss.Color("#5BD4FF")
+	colorAccentAlt = lipgloss.Color("#73FFB6")
+	colorWarn      = lipgloss.Color("#FFD166")
+	colorError     = lipgloss.Color("#FF6B6B")
+	colorHeading   = lipgloss.Color("#AEB9CC")
+	colorSelected  = lipgloss.Color("#1E3A5F")
 )
 
-// مدل اصلی UI
+type Controller interface {
+	ListServiceStates() []model.Service
+	StartStoredService(ctx context.Context, name string) error
+	StopService(name string)
+	StopAllServices()
+	RestartService(ctx context.Context, name string) error
+	RestartAllServices(ctx context.Context)
+}
+
 type UI struct {
-	manager       *manager.ServiceManager
-	services      []model.Service
-	cursorIndex   int
-	quitting      bool
-	width         int
-	height        int
-	viewport      viewport.Model
-	ready         bool
-	ctx           context.Context
-	addMode       bool
-	addCandidates []string
-	addCursor     int
-	addSelected   map[string]bool
-	// حالت فرم افزودن/ویرایش سرویس داخل overlay: "" یعنی لیست، "new" یا "edit"
+	manager           Controller
+	services          []model.Service
+	cursorIndex       int
+	quitting          bool
+	width             int
+	height            int
+	viewport          viewport.Model
+	ready             bool
+	ctx               context.Context
+	addMode           bool
+	addCandidates     []string
+	addCursor         int
+	addSelected       map[string]bool
 	addFormMode       string
 	addFormName       textinput.Model
 	addFormCmd        textinput.Model
-	addFormFocus      int    // 0 = name, 1 = command
-	addFormOrig       string // نام اصلی هنگام ویرایش (برای rename/restart)
-	addFormErr        string // پیام خطای اعتبارسنجی داخل فرم
+	addFormFocus      int // 0 = name, 1 = command
+	addFormOrig       string
+	addFormErr        string
 	editStatus        string
-	editStatusSeq     int  // شناسه‌ی نسخه‌ی پیام وضعیت برای پاک‌سازی خودکار امن
-	logFilterSelected bool // نمایش فقط لاگ سرویسِ انتخاب‌شده
-	spinnerFrame      int  // فریم اسپینر هنگام خاموش‌شدن
-	tableOffset       int  // ایندکس شروعِ پنجره‌ی اسکرول جدول سرویس‌ها
+	editStatusSeq     int
+	logFilterSelected bool
+	spinnerFrame      int
+	tableOffset       int
 }
 
 const uiTickInterval = 500 * time.Millisecond
 
-// NewUI ساخت مدل UI جدید
-func NewUI(mgr *manager.ServiceManager, ctx context.Context) *UI {
+func NewUI(mgr Controller, ctx context.Context) *UI {
 	return &UI{
 		manager:  mgr,
 		services: []model.Service{},
@@ -100,13 +100,10 @@ func NewUI(mgr *manager.ServiceManager, ctx context.Context) *UI {
 	}
 }
 
-// Init مقداردهی اولیه مدل Bubble Tea
-// در v2، ورود به alt-screen دیگر دستوری نیست و داخل View() تنظیم می‌شود.
 func (u *UI) Init() tea.Cmd {
 	return tickCmd(uiTickInterval)
 }
 
-// Update مدیریت رویدادها و به‌روزرسانی وضعیت UI
 func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
@@ -125,7 +122,6 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			u.viewport.SetHeight(viewportHeight)
 		}
 
-		// اگر فرم افزودن/ویرایش باز است، عرض ورودی‌ها با ترمینال هماهنگ شود
 		if u.addMode && u.addFormMode != "" {
 			inputWidth := u.formInputWidth()
 			u.addFormName.SetWidth(inputWidth)
@@ -134,7 +130,6 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.MouseWheelMsg:
 		if u.addMode {
-			// در overlay لیست سرویس‌ها (نه فرم) با چرخ ماوس بین کاندیداها حرکت کن
 			if u.addFormMode == "" {
 				switch msg.Button {
 				case tea.MouseWheelUp:
@@ -166,7 +161,6 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		switch key {
 		case "q", "ctrl+c", "esc":
-			// خاموش‌شدن را async انجام بده تا UI بتواند اسپینر «در حال توقف» را نشان دهد
 			u.quitting = true
 			return u, tea.Batch(u.shutdownCmd(), spinnerTick())
 
@@ -187,7 +181,6 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "pgup", "pgdown", "home", "end", "ctrl+u", "ctrl+d":
-			// اسکرول مستقیم لاگ‌ها بدون جابه‌جایی انتخاب سرویس
 			u.viewport, cmd = u.viewport.Update(msg)
 
 		case "r":
@@ -203,7 +196,11 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "s":
 			if u.cursorIndex < len(u.services) && len(u.services) > 0 {
-				u.manager.StopService(u.services[u.cursorIndex].Name)
+				name := u.services[u.cursorIndex].Name
+				return u, func() tea.Msg {
+					u.manager.StopService(name)
+					return nil
+				}
 			}
 
 		case "a":
@@ -213,7 +210,6 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return u, u.launchEditor()
 
 		case "l":
-			// سوییچ بین «لاگ همه» و «فقط لاگ سرویسِ انتخاب‌شده»
 			u.logFilterSelected = !u.logFilterSelected
 			u.refreshViewportContent()
 			u.viewport.GotoBottom()
@@ -227,7 +223,6 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch {
 		case msg.ok:
 			status = fmt.Sprintf("✓ Config saved: %d service(s), %d group(s) — affects future runs", msg.services, msg.groups)
-			// اگر overlay باز است، لیست سرویس‌ها بعد از ویرایش خارجی تازه شود
 			if u.addMode && u.addFormMode == "" {
 				u.refreshAddCandidates()
 			}
@@ -270,7 +265,6 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return u, cmd
 }
 
-// shutdownCmd توقف همه‌ی سرویس‌ها را در پس‌زمینه انجام می‌دهد تا UI بلوک نشود.
 func (u *UI) shutdownCmd() tea.Cmd {
 	return func() tea.Msg {
 		u.manager.StopAllServices()
@@ -278,8 +272,6 @@ func (u *UI) shutdownCmd() tea.Cmd {
 	}
 }
 
-// setStatus پیام وضعیت را تنظیم و یک تایمر برای پاک‌سازی خودکار آن برمی‌گرداند.
-// از شناسه‌ی نسخه استفاده می‌شود تا تایمرِ یک پیام قدیمی، پیام جدیدتر را پاک نکند.
 func (u *UI) setStatus(text string) tea.Cmd {
 	u.editStatus = text
 	u.editStatusSeq++
@@ -289,14 +281,12 @@ func (u *UI) setStatus(text string) tea.Cmd {
 	})
 }
 
-// spinnerTick تیک بعدی انیمیشن اسپینر
 func spinnerTick() tea.Cmd {
 	return tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
 		return spinnerTickMsg(t)
 	})
 }
 
-// launchEditor کانفیگ فعلی را در ادیتور خارجی باز می‌کند و نتیجه را اعتبارسنجی/ذخیره می‌کند.
 func (u *UI) launchEditor() tea.Cmd {
 	st := storage.NewStorage()
 	services, _ := st.LoadServices()
@@ -335,7 +325,6 @@ func (u *UI) launchEditor() tea.Cmd {
 
 		validated, err := configedit.Validate(edited)
 		if err != nil {
-			// temp را نگه می‌داریم تا ویرایش‌ها گم نشوند
 			return editResultMsg{err: err, tmpPath: tmpPath}
 		}
 
@@ -349,8 +338,6 @@ func (u *UI) launchEditor() tea.Cmd {
 	})
 }
 
-// View رندر رابط کاربری — در v2 یک tea.View برمی‌گرداند و alt-screen/حالت ماوس
-// به‌صورت declarative روی همان View تنظیم می‌شوند.
 func (u *UI) View() tea.View {
 	v := tea.NewView(u.viewContent())
 	v.AltScreen = true
@@ -358,7 +345,6 @@ func (u *UI) View() tea.View {
 	return v
 }
 
-// viewContent محتوای متنی رابط را می‌سازد (منطق رندر مستقل از تنظیمات ترمینال).
 func (u *UI) viewContent() string {
 	if u.quitting {
 		return u.renderShutdownScreen()
@@ -409,8 +395,6 @@ func (u *UI) viewContent() string {
 	return lipgloss.JoinVertical(lipgloss.Left, sections...)
 }
 
-// ورود به حالت افزودن سرویس — همه‌ی سرویس‌های ذخیره‌شده لیست می‌شوند
-// (در حال اجراها با برچسب running و غیرقابل‌انتخاب برای اجرا، ولی قابل ویرایش).
 func (u *UI) enterAddMode() {
 	st := storage.NewStorage()
 	allServices, err := st.ListServiceNames()
@@ -426,7 +410,6 @@ func (u *UI) enterAddMode() {
 	u.addSelected = make(map[string]bool)
 }
 
-// خروج کامل از حالت افزودن و پاک‌سازی وضعیت
 func (u *UI) exitAddMode() {
 	u.addMode = false
 	u.addFormMode = ""
@@ -436,7 +419,6 @@ func (u *UI) exitAddMode() {
 	u.addSelected = nil
 }
 
-// مجموعه‌ی نام سرویس‌های در حال اجرا (از روی وضعیت کش‌شده‌ی UI)
 func (u *UI) runningNameSet() map[string]bool {
 	set := make(map[string]bool, len(u.services))
 	for i := range u.services {
@@ -445,9 +427,7 @@ func (u *UI) runningNameSet() map[string]bool {
 	return set
 }
 
-// پردازش کلیدها در حالت افزودن سرویس
 func (u *UI) updateAddMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// در حالت فرم (ساخت/ویرایش) کلیدها به فرم می‌روند
 	if u.addFormMode != "" {
 		return u.updateAddForm(msg)
 	}
@@ -480,7 +460,6 @@ func (u *UI) updateAddMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "e":
 		return u, u.openEditServiceForm()
 	case "c":
-		// ویرایش کامل کانفیگ (سرویس‌ها + گروه‌ها) در ادیتور خارجی
 		return u, u.launchEditor()
 	case "enter":
 		running := u.runningNameSet()
@@ -516,7 +495,6 @@ func newServiceTextInput(placeholder, value string, width int) textinput.Model {
 	return ti
 }
 
-// openNewServiceForm فرم ساخت سرویس جدید را باز می‌کند
 func (u *UI) openNewServiceForm() tea.Cmd {
 	u.addFormMode = "new"
 	u.addFormOrig = ""
@@ -529,7 +507,6 @@ func (u *UI) openNewServiceForm() tea.Cmd {
 	return u.addFormName.Focus()
 }
 
-// openEditServiceForm فرم ویرایش سرویسِ زیر کرسر را باز می‌کند
 func (u *UI) openEditServiceForm() tea.Cmd {
 	if u.addCursor < 0 || u.addCursor >= len(u.addCandidates) {
 		return nil
@@ -550,7 +527,6 @@ func (u *UI) openEditServiceForm() tea.Cmd {
 	return u.addFormName.Focus()
 }
 
-// closeAddForm فرم را می‌بندد و به لیست برمی‌گردد
 func (u *UI) closeAddForm() {
 	u.addFormMode = ""
 	u.addFormErr = ""
@@ -558,7 +534,6 @@ func (u *UI) closeAddForm() {
 	u.addFormCmd.Blur()
 }
 
-// toggleAddFormFocus فوکوس را بین فیلد نام و کامند جابه‌جا می‌کند
 func (u *UI) toggleAddFormFocus() tea.Cmd {
 	if u.addFormFocus == 0 {
 		u.addFormFocus = 1
@@ -570,7 +545,6 @@ func (u *UI) toggleAddFormFocus() tea.Cmd {
 	return u.addFormName.Focus()
 }
 
-// updateAddForm پردازش کلیدها در حالت فرم ساخت/ویرایش
 func (u *UI) updateAddForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	keyRaw := msg.String()
 	key := keyRaw
@@ -597,7 +571,6 @@ func (u *UI) updateAddForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return u, cmd
 }
 
-// submitServiceForm فرم را اعتبارسنجی و ذخیره می‌کند
 func (u *UI) submitServiceForm() (tea.Model, tea.Cmd) {
 	name := strings.TrimSpace(u.addFormName.Value())
 	command := strings.TrimSpace(u.addFormCmd.Value())
@@ -666,7 +639,6 @@ func (u *UI) submitServiceForm() (tea.Model, tea.Cmd) {
 	return u, statusCmd
 }
 
-// refreshAddCandidates لیست سرویس‌ها را از storage تازه می‌کند
 func (u *UI) refreshAddCandidates() {
 	names, err := storage.NewStorage().ListServiceNames()
 	if err != nil {
@@ -684,7 +656,6 @@ func (u *UI) refreshAddCandidates() {
 	}
 }
 
-// focusCandidate کرسر را روی سرویس با نام داده‌شده می‌برد
 func (u *UI) focusCandidate(name string) {
 	for i, c := range u.addCandidates {
 		if c == name {
@@ -703,11 +674,9 @@ func (u *UI) ensureCursorInRange() {
 	}
 }
 
-// maxVisibleServices سقف تعداد ردیف‌های قابل‌نمایش جدول سرویس‌ها را بر اساس ارتفاع ترمینال برمی‌گرداند
-// تا جدول کل صفحه را اشغال نکند و فضا برای لاگ‌ها بماند.
 func maxVisibleServices(totalHeight int) int {
 	if totalHeight <= 0 {
-		return 8 // پیش‌فرض معقول پیش از دریافت ابعاد
+		return 8
 	}
 	cap := totalHeight / 3
 	if cap < 3 {
@@ -719,7 +688,6 @@ func maxVisibleServices(totalHeight int) int {
 	return cap
 }
 
-// ensureCursorVisible offset پنجره‌ی جدول را طوری تنظیم می‌کند که کرسر همیشه داخل پنجره بماند.
 func (u *UI) ensureCursorVisible(maxVisible int) {
 	if maxVisible <= 0 {
 		u.tableOffset = 0
@@ -754,14 +722,11 @@ func (u *UI) refreshViewportContent() {
 		contentWidth = 40
 	}
 
-	// انتخاب دامنه‌ی لاگ: همه یا فقط سرویسِ زیر کرسر
 	services := u.services
 	if u.logFilterSelected && u.cursorIndex >= 0 && u.cursorIndex < len(u.services) {
 		services = []model.Service{u.services[u.cursorIndex]}
 	}
 
-	// فقط وقتی کاربر ته صفحه است لاگ‌های جدید را دنبال کن؛
-	// اگر بالا اسکرول کرده، موقعیتش حفظ می‌شود و با رندر مجدد نمی‌پرد.
 	follow := u.viewport.AtBottom()
 	newContent := renderLogsContent(services, contentWidth)
 	u.viewport.SetContent(newContent)
@@ -770,7 +735,6 @@ func (u *UI) refreshViewportContent() {
 	}
 }
 
-// onCursorMoved هنگام جابه‌جایی کرسر، اگر فیلتر فعال باشد لاگ را برای سرویس جدید تازه می‌کند.
 func (u *UI) onCursorMoved() {
 	if u.logFilterSelected {
 		u.refreshViewportContent()
@@ -778,7 +742,6 @@ func (u *UI) onCursorMoved() {
 	}
 }
 
-// logScopeLabel برچسب دامنه‌ی لاگ برای نوار راهنما
 func (u *UI) logScopeLabel() string {
 	if u.logFilterSelected && u.cursorIndex >= 0 && u.cursorIndex < len(u.services) {
 		return truncateRunes(u.services[u.cursorIndex].Name, 14)
@@ -811,7 +774,7 @@ func calculateViewportHeight(serviceCount, totalHeight int) int {
 		tableLines = 1
 	}
 	if serviceCount > maxVis {
-		tableLines++ // خط نشانگر اسکرول جدول
+		tableLines++
 	}
 	overhead := tableLines + 2 + 3
 	viewportHeight := totalHeight - overhead
@@ -833,7 +796,6 @@ func renderServiceTable(services []model.Service, selectedIndex, offset, maxVisi
 		width = 60
 	}
 
-	// محدوده‌ی پنجره‌ی قابل‌نمایش
 	if maxVisible <= 0 {
 		maxVisible = len(services)
 	}
@@ -999,7 +961,6 @@ func renderServiceTable(services []model.Service, selectedIndex, offset, maxVisi
 		rows = append(rows, row)
 	}
 
-	// خط نشانگر اسکرول وقتی همه‌ی سرویس‌ها در پنجره جا نمی‌شوند
 	if len(services) > maxVisible {
 		above := start
 		below := len(services) - end
@@ -1320,7 +1281,6 @@ func (u *UI) renderAddServiceOverlay() string {
 	return lipgloss.JoinVertical(lipgloss.Left, overlayBox, instructionStyled)
 }
 
-// renderServiceForm فرم ساخت/ویرایش سرویس را رندر می‌کند
 func (u *UI) renderServiceForm() string {
 	width := u.width
 	if width <= 0 {
@@ -1441,7 +1401,6 @@ func (u *UI) renderShutdownScreen() string {
 		Align(lipgloss.Center).
 		Render(shutdownStyle.Render(fmt.Sprintf("%s  Stopping services, please wait...", frame)))
 
-	// وسط‌چینِ کامل (افقی و عمودی) بر اساس ابعاد فعلی ترمینال
 	if u.width <= 0 || u.height <= 0 {
 		return box
 	}

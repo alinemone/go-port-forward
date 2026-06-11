@@ -7,28 +7,24 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"time"
 
 	"github.com/alinemone/go-port-forward/internal/model"
 )
 
-// ساختار کامل داده‌های ذخیره‌سازی
-// بدون omitempty تا فایل همیشه ساختار کامل (services + groups) داشته باشد
 type StorageData struct {
 	Services map[string]string   `json:"services"`
 	Groups   map[string][]string `json:"groups"`
 	Legacy   map[string]string   `json:"-"`
 }
 
-// مدیریت ذخیره‌سازی سرویس‌ها و گروه‌ها
 type Storage struct {
 	filePath string
 }
 
-// ساخت نمونه ذخیره‌سازی در ~/.pf/services.json با مهاجرت خودکار از مسیر قدیمی
 func NewStorage() *Storage {
 	newPath, ok := configStoragePath()
 	if !ok {
-		// fallback: رفتار قدیمی (کنار فایل اجرایی)
 		return &Storage{filePath: legacyStoragePath()}
 	}
 
@@ -39,7 +35,6 @@ func NewStorage() *Storage {
 	return &Storage{filePath: newPath}
 }
 
-// مسیر canonical جدید: ~/.pf/services.json
 func configStoragePath() (string, bool) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -52,7 +47,6 @@ func configStoragePath() (string, bool) {
 	return filepath.Join(configDir, "services.json"), true
 }
 
-// مسیر قدیمی کنار فایل اجرایی
 func legacyStoragePath() string {
 	exe, err := os.Executable()
 	if err != nil {
@@ -61,39 +55,34 @@ func legacyStoragePath() string {
 	return filepath.Join(filepath.Dir(exe), "services.json")
 }
 
-// مهاجرت یک‌باره‌ی فایل قدیمی به مسیر جدید (فقط وقتی مسیر جدید هنوز ساخته نشده)
 func migrateLegacyStorage(newPath, oldPath string) {
 	if newPath == oldPath || oldPath == "" {
 		return
 	}
 	if _, err := os.Stat(newPath); err == nil {
-		return // مسیر جدید از قبل وجود دارد
+		return
 	}
 	data, err := os.ReadFile(oldPath)
 	if err != nil {
-		return // فایل قدیمی وجود ندارد یا قابل خواندن نیست
+		return
 	}
-	_ = os.WriteFile(newPath, data, 0644)
+	_ = os.WriteFile(newPath, data, 0600)
 }
 
-// Path مسیر فایل ذخیره‌سازی فعلی را برمی‌گرداند
 func (s *Storage) Path() string {
 	return s.filePath
 }
 
-// SaveData کل داده‌ها (سرویس‌ها و گروه‌ها) را روی دیسک ذخیره می‌کند
 func (s *Storage) SaveData(data *StorageData) error {
 	return s.writeStorage(data)
 }
 
-// EnsureExists اگر فایل کانفیگ وجود نداشته باشد، یک اسکلت کامل (services + groups خالی) می‌سازد.
-// برای بار اول نصب: کاربر تازه با اجرای pf یک فایل با ساختار کامل دریافت می‌کند.
 func (s *Storage) EnsureExists() error {
 	if s.filePath == "" {
 		return nil
 	}
 	if _, err := os.Stat(s.filePath); err == nil {
-		return nil // از قبل وجود دارد
+		return nil
 	}
 	return s.writeStorage(&StorageData{
 		Services: make(map[string]string),
@@ -101,7 +90,6 @@ func (s *Storage) EnsureExists() error {
 	})
 }
 
-// خواندن کامل داده‌ها از دیسک
 func (s *Storage) readStorage() (*StorageData, error) {
 	if _, err := os.Stat(s.filePath); os.IsNotExist(err) {
 		return &StorageData{
@@ -134,16 +122,46 @@ func (s *Storage) readStorage() (*StorageData, error) {
 	}, nil
 }
 
-// ذخیره کامل داده‌ها روی دیسک
 func (s *Storage) writeStorage(data *StorageData) error {
 	jsonData, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.filePath, jsonData, 0644)
+
+	dir := filepath.Dir(s.filePath)
+	tmp, err := os.CreateTemp(dir, ".services-*.json.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+
+	if _, err := tmp.Write(jsonData); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+
+	return renameWithRetry(tmpName, s.filePath)
 }
 
-// بارگذاری سرویس‌ها (سازگار با نسخه‌های قدیمی)
+func renameWithRetry(oldPath, newPath string) error {
+	var err error
+	for attempt := 0; attempt < 10; attempt++ {
+		if err = os.Rename(oldPath, newPath); err == nil {
+			return nil
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return err
+}
+
 func (s *Storage) LoadServices() (map[string]string, error) {
 	data, err := s.readStorage()
 	if err != nil {
@@ -152,7 +170,6 @@ func (s *Storage) LoadServices() (map[string]string, error) {
 	return data.Services, nil
 }
 
-// ذخیره سرویس‌ها (سازگار با نسخه‌های قدیمی)
 func (s *Storage) saveServices(services map[string]string) error {
 	data, err := s.readStorage()
 	if err != nil {
@@ -162,7 +179,6 @@ func (s *Storage) saveServices(services map[string]string) error {
 	return s.writeStorage(data)
 }
 
-// افزودن سرویس جدید
 func (s *Storage) AddService(name, command string) error {
 	services, err := s.LoadServices()
 	if err != nil {
@@ -172,7 +188,6 @@ func (s *Storage) AddService(name, command string) error {
 	return s.saveServices(services)
 }
 
-// حذف سرویس از ذخیره‌سازی (و پاک‌سازی عضویت آن در همه‌ی گروه‌ها)
 func (s *Storage) DeleteService(name string) error {
 	data, err := s.readStorage()
 	if err != nil {
@@ -185,7 +200,6 @@ func (s *Storage) DeleteService(name string) error {
 
 	delete(data.Services, name)
 
-	// حذف سرویس از عضویت همه‌ی گروه‌ها تا مرجع معلق نماند
 	for groupName, members := range data.Groups {
 		filtered := make([]string, 0, len(members))
 		for _, m := range members {
@@ -199,7 +213,6 @@ func (s *Storage) DeleteService(name string) error {
 	return s.writeStorage(data)
 }
 
-// RenameService تغییر نام سرویس و به‌روزرسانی عضویت آن در گروه‌ها
 func (s *Storage) RenameService(oldName, newName string) error {
 	if oldName == newName {
 		return fmt.Errorf("new name is the same as the old name")
@@ -224,7 +237,6 @@ func (s *Storage) RenameService(oldName, newName string) error {
 	delete(data.Services, oldName)
 	data.Services[newName] = command
 
-	// به‌روزرسانی عضویت سرویس در همه‌ی گروه‌ها
 	for groupName, members := range data.Groups {
 		for i, member := range members {
 			if member == oldName {
@@ -236,7 +248,6 @@ func (s *Storage) RenameService(oldName, newName string) error {
 	return s.writeStorage(data)
 }
 
-// RenameGroup تغییر نام یک گروه
 func (s *Storage) RenameGroup(oldName, newName string) error {
 	if oldName == newName {
 		return fmt.Errorf("new name is the same as the old name")
@@ -264,7 +275,6 @@ func (s *Storage) RenameGroup(oldName, newName string) error {
 	return s.writeStorage(data)
 }
 
-// دریافت فرمان یک سرویس
 func (s *Storage) GetService(name string) (string, error) {
 	services, err := s.LoadServices()
 	if err != nil {
@@ -281,7 +291,6 @@ func (s *Storage) GetService(name string) (string, error) {
 
 var portRegex = regexp.MustCompile(`(\d+):(\d+)`)
 
-// ParsePortsFromCommand استخراج پورت‌ها از فرمان اجرا
 func ParsePortsFromCommand(command string) (local, remote string) {
 	matches := portRegex.FindStringSubmatch(command)
 	if len(matches) == 3 {
@@ -290,7 +299,6 @@ func ParsePortsFromCommand(command string) (local, remote string) {
 	return "", ""
 }
 
-// افزودن گروه جدید
 func (s *Storage) AddGroup(name string, services []string) error {
 	data, err := s.readStorage()
 	if err != nil {
@@ -311,7 +319,6 @@ func (s *Storage) AddGroup(name string, services []string) error {
 	return s.writeStorage(data)
 }
 
-// AddServicesToGroup سرویس‌ها را به یک گروه موجود اضافه می‌کند (با حذف تکراری‌ها)
 func (s *Storage) AddServicesToGroup(groupName string, services []string) error {
 	data, err := s.readStorage()
 	if err != nil {
@@ -342,7 +349,6 @@ func (s *Storage) AddServicesToGroup(groupName string, services []string) error 
 	return s.writeStorage(data)
 }
 
-// RemoveServicesFromGroup سرویس‌ها را از یک گروه موجود حذف می‌کند
 func (s *Storage) RemoveServicesFromGroup(groupName string, services []string) error {
 	data, err := s.readStorage()
 	if err != nil {
@@ -370,7 +376,6 @@ func (s *Storage) RemoveServicesFromGroup(groupName string, services []string) e
 	return s.writeStorage(data)
 }
 
-// حذف گروه
 func (s *Storage) DeleteGroup(name string) error {
 	data, err := s.readStorage()
 	if err != nil {
@@ -385,7 +390,6 @@ func (s *Storage) DeleteGroup(name string) error {
 	return s.writeStorage(data)
 }
 
-// دریافت سرویس‌های یک گروه
 func (s *Storage) GetGroupServices(name string) ([]string, error) {
 	data, err := s.readStorage()
 	if err != nil {
@@ -400,7 +404,6 @@ func (s *Storage) GetGroupServices(name string) ([]string, error) {
 	return services, nil
 }
 
-// دریافت لیست گروه‌ها
 func (s *Storage) ListGroups() (map[string][]string, error) {
 	data, err := s.readStorage()
 	if err != nil {
@@ -409,7 +412,6 @@ func (s *Storage) ListGroups() (map[string][]string, error) {
 	return data.Groups, nil
 }
 
-// دریافت نام تمام سرویس‌ها برای حالت all
 func (s *Storage) ListServiceNames() ([]string, error) {
 	data, err := s.readStorage()
 	if err != nil {
@@ -424,7 +426,6 @@ func (s *Storage) ListServiceNames() ([]string, error) {
 	return names, nil
 }
 
-// بررسی تداخل نام بین سرویس و گروه
 func (s *Storage) HasNameConflict(name string) (bool, error) {
 	data, err := s.readStorage()
 	if err != nil {
@@ -437,7 +438,6 @@ func (s *Storage) HasNameConflict(name string) (bool, error) {
 	return isService && isGroup, nil
 }
 
-// بررسی تداخل پورت بین سرویس‌ها
 func (s *Storage) FindPortConflicts(serviceNames []string) ([]model.PortConflict, error) {
 	data, err := s.readStorage()
 	if err != nil {

@@ -12,7 +12,6 @@ import (
 	"github.com/alinemone/go-port-forward/internal/storage"
 )
 
-// EditorCommand یک *exec.Cmd آماده برای باز کردن مسیر داده‌شده در ادیتور کاربر می‌سازد.
 func EditorCommand(path string) (*exec.Cmd, error) {
 	editor := pickEditor()
 	if editor == "" {
@@ -26,7 +25,6 @@ func EditorCommand(path string) (*exec.Cmd, error) {
 	return cmd, nil
 }
 
-// انتخاب ادیتور: $VISUAL → $EDITOR → پیش‌فرض پلتفرم
 func pickEditor() string {
 	if e := strings.TrimSpace(os.Getenv("VISUAL")); e != "" {
 		return e
@@ -45,7 +43,6 @@ func pickEditor() string {
 	return ""
 }
 
-// Validate محتوای JSON کانفیگ را تجزیه و اعتبارسنجی می‌کند.
 func Validate(data []byte) (*storage.StorageData, error) {
 	var sd storage.StorageData
 	if err := json.Unmarshal(data, &sd); err != nil {

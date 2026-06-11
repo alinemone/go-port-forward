@@ -26,10 +26,8 @@ import (
 )
 
 func main() {
-	// پاک کردن باینری قدیمی از آپدیت قبلی (فقط روی ویندوز کاری انجام می‌ده)
 	updater.CleanupStaleArtifacts()
 
-	// اطمینان از وجود فایل کانفیگ با ساختار کامل (services + groups) — مخصوصاً بار اول نصب
 	storage.NewStorage().EnsureExists()
 
 	if len(os.Args) < 2 {
@@ -182,7 +180,6 @@ func runStartCommand(args []string) {
 
 	// Start UI immediately
 	u := ui.NewUI(mgr, ctx)
-	// در v2، alt-screen و حالت ماوس به‌صورت declarative داخل View() ست می‌شوند
 	program := tea.NewProgram(u)
 
 	// Start all services in parallel - they will appear in UI as they connect
@@ -219,7 +216,6 @@ func runRenameCommand(args []string) {
 
 	st := storage.NewStorage()
 
-	// auto-detect: اول سرویس، بعد گروه
 	if _, err := st.GetService(oldName); err == nil {
 		if err := st.RenameService(oldName, newName); err != nil {
 			fmt.Printf("Error: %v\n", err)
@@ -294,7 +290,6 @@ func runCleanupCommand(args []string) {
 	fmt.Println("Tip: use 'pf cleanup --all' to kill ALL kubectl/ssh processes.")
 }
 
-// تشخیص درخواست حالت --all برای cleanup
 func cleanupWantsAll(args []string) bool {
 	for _, a := range args {
 		switch strings.ToLower(strings.TrimSpace(a)) {
@@ -305,7 +300,6 @@ func cleanupWantsAll(args []string) bool {
 	return false
 }
 
-// عبور از تأیید با -y/--yes (برای اسکریپت)
 func cleanupWantsYes(args []string) bool {
 	for _, a := range args {
 		switch strings.ToLower(strings.TrimSpace(a)) {
@@ -316,7 +310,6 @@ func cleanupWantsYes(args []string) bool {
 	return false
 }
 
-// پرسش تأیید بله/خیر (پیش‌فرض خیر)
 func confirm(prompt string) bool {
 	fmt.Printf("%s Continue? [y/N]: ", prompt)
 	var answer string
@@ -325,7 +318,6 @@ func confirm(prompt string) bool {
 	return answer == "y" || answer == "yes"
 }
 
-// رفتار قدیمی: کشتن همه‌ی پروسه‌های kubectl/ssh ماشین
 func cleanupAllProcesses() {
 	fmt.Println("Cleaning up ALL kubectl and ssh processes...")
 
@@ -341,7 +333,6 @@ func cleanupAllProcesses() {
 	fmt.Println("Note: This kills ALL kubectl and ssh processes")
 }
 
-// جمع‌آوری پورت‌های local یکتای همه‌ی سرویس‌های ذخیره‌شده
 func configuredPorts(st *storage.Storage) ([]string, error) {
 	services, err := st.LoadServices()
 	if err != nil {
@@ -441,7 +432,6 @@ func runGroupCommand(args []string) {
 	}
 }
 
-// splitNameList ورودی‌های جداشده با کاما/فاصله را به لیست نام‌ها تبدیل می‌کند (خالی‌ها حذف می‌شوند)
 func splitNameList(args []string) []string {
 	input := strings.Join(args, " ")
 	return strings.FieldsFunc(input, func(r rune) bool {
@@ -705,7 +695,6 @@ Note: Group names must not conflict with service names.
 	fmt.Println(help)
 }
 
-// رنگ‌های ساده‌ی ANSI برای خروجی help — بدون هیچ پکیجی
 const (
 	clrReset  = "\033[0m"
 	clrBold   = "\033[1m"
@@ -715,7 +704,6 @@ const (
 	clrGray   = "\033[90m"
 )
 
-// رنگ با احترام به متغیر استاندارد NO_COLOR
 func clr(code, s string) string {
 	if os.Getenv("NO_COLOR") != "" {
 		return s
@@ -952,7 +940,6 @@ func resolveRunTargets(st runTargetStore, input string) ([]string, error) {
 		return names, nil
 	}
 
-	// جداسازی با کاما و هر whitespace؛ ورودی‌های خالی نادیده گرفته می‌شوند
 	targets := strings.FieldsFunc(input, func(r rune) bool {
 		return r == ',' || unicode.IsSpace(r)
 	})

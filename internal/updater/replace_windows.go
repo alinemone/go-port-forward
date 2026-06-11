@@ -25,7 +25,6 @@ import (
 func replaceBinary(newPath, exePath string) error {
 	oldPath := exePath + ".old"
 
-	// در صورت وجود .old قبلی، تلاش برای پاک کردن — اگر هنوز lock باشه نگران نباش
 	_ = os.Remove(oldPath)
 
 	if err := os.Rename(exePath, oldPath); err != nil {
@@ -33,7 +32,6 @@ func replaceBinary(newPath, exePath string) error {
 	}
 
 	if err := moveOrCopy(newPath, exePath); err != nil {
-		// rollback — برگردوندن .old سرجاش
 		_ = os.Rename(oldPath, exePath)
 		return fmt.Errorf("move new binary into place: %w", err)
 	}

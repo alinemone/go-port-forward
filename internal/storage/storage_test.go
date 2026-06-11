@@ -255,7 +255,6 @@ func TestRemoveServicesFromGroup(t *testing.T) {
 		t.Fatalf("expected [core], got %v", members)
 	}
 
-	// حذف عضو ناموجود → بدون خطا، بدون تغییر
 	if err := s.RemoveServicesFromGroup("backend", []string{"not-a-member"}); err != nil {
 		t.Fatalf("removing non-member should not error: %v", err)
 	}
@@ -348,7 +347,6 @@ func TestEnsureExistsCreatesFullSkeleton(t *testing.T) {
 		t.Fatalf("file not created: %v", err)
 	}
 
-	// باید هر دو کلید services و groups را داشته باشد
 	if !strings.Contains(string(raw), `"services"`) || !strings.Contains(string(raw), `"groups"`) {
 		t.Errorf("skeleton must contain both keys, got: %s", raw)
 	}

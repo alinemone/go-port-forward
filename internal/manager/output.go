@@ -39,7 +39,6 @@ func indicatesHealthyPortForward(line string) bool {
 		strings.Contains(line, "Handling connection for")
 }
 
-// تشخیص ساده خطا از روی متن خروجی
 func looksLikeError(line string) bool {
 	lower := strings.ToLower(line)
 	return strings.Contains(lower, "error") ||
@@ -52,7 +51,6 @@ func looksLikeError(line string) bool {
 		strings.Contains(lower, "lost connection")
 }
 
-// خطاهای گذرای kubectl port-forward که معمولاً به معنی خرابی تونل نیستند
 func isTransientPortForwardError(line string) bool {
 	lower := strings.ToLower(line)
 
@@ -66,7 +64,6 @@ func isTransientPortForwardError(line string) bool {
 			strings.Contains(lower, "error copying from local connection to remote stream"))
 }
 
-// کوتاه‌سازی پیام خطا برای نمایش
 func normalizeErrorLine(line string) string {
 	if len(line) > 150 {
 		line = line[:147] + "..."
@@ -74,7 +71,6 @@ func normalizeErrorLine(line string) string {
 	return strings.Join(strings.Fields(line), " ")
 }
 
-// فعال بودن لاگ خطا در ترمینال بر اساس متغیر محیطی
 func isStderrLoggingEnabled() bool {
 	raw := strings.TrimSpace(strings.ToLower(os.Getenv("PF_STDERR")))
 	return raw == "1" || raw == "true" || raw == "yes" || raw == "on"

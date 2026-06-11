@@ -5,7 +5,6 @@ import (
 	"strings"
 )
 
-// FreePort پروسه‌های listenerِ روی یک پورت TCP محلی را می‌کشد و PIDهای کشته‌شده را برمی‌گرداند.
 func FreePort(port string) []int {
 	port = strings.TrimSpace(port)
 	if port == "" {
@@ -14,8 +13,6 @@ func FreePort(port string) []int {
 	return killListenersOnPort(port)
 }
 
-// parseNetstatListeners از خروجی `netstat -ano -p tcp` ویندوز،
-// PIDهای پروسه‌هایی که روی پورت داده‌شده LISTENING هستند را استخراج می‌کند.
 func parseNetstatListeners(output, port string) []int {
 	suffix := ":" + port
 	seen := make(map[int]bool)
@@ -45,7 +42,6 @@ func parseNetstatListeners(output, port string) []int {
 	return pids
 }
 
-// parseLsofPIDs از خروجی `lsof -ti` یونیکس (هر خط یک PID) لیست یکتای PIDها را می‌سازد.
 func parseLsofPIDs(output string) []int {
 	seen := make(map[int]bool)
 	var pids []int

@@ -7,17 +7,14 @@ import (
 	"syscall"
 )
 
-// ساخت process group جدید برای یونیکس
 func newProcessGroupAttr() *syscall.SysProcAttr {
 	return &syscall.SysProcAttr{Setpgid: true}
 }
 
-// کشتن process group در یونیکس
 func killUnixProcessGroup(pid int) {
 	syscall.Kill(-pid, syscall.SIGKILL)
 }
 
-// کشتن پروسه‌های listener روی یک پورت در یونیکس با lsof
 func killListenersOnPort(port string) []int {
 	out, err := exec.Command("lsof", "-ti", "tcp:"+port, "-sTCP:LISTEN").Output()
 	if err != nil {

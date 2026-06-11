@@ -75,7 +75,6 @@ func Run(opts Options) error {
 
 	cmp, err := compareVersions(opts.CurrentVersion, rel.TagName)
 	if err != nil {
-		// نسخه‌ی فعلی قابل‌تشخیص نیست (مثلاً "dev") — اجازه بده آپدیت کنه
 		cmp = -1
 	}
 
@@ -93,14 +92,12 @@ func Run(opts Options) error {
 		return nil
 	}
 
-	// چک permission روی پوشه‌ی باینری قبل از دانلود
 	if err := checkWritable(filepath.Dir(exePath)); err != nil {
 		fmt.Printf("⚠ No write permission to %s\n", filepath.Dir(exePath))
 		fmt.Println("  Attempting to relaunch with elevated privileges...")
 		if elevErr := tryElevate(); elevErr != nil {
 			return fmt.Errorf("elevation failed: %w (original: %v)", elevErr, err)
 		}
-		// اگه elevation برگشت، یعنی نتونست launch کنه — وگرنه exit کرده بود
 		return errors.New("elevation did not exit; please re-run with sudo or as administrator")
 	}
 
@@ -116,17 +113,16 @@ func Run(opts Options) error {
 		return fmt.Errorf("download binary: %w", err)
 	}
 
-	if sumsAsset != nil {
-		fmt.Println("✓ Verifying SHA256...")
-		sumsPath := filepath.Join(tmpDir, sumsAsset.Name)
-		if err := downloadFile(sumsAsset.BrowserDownloadURL, sumsPath); err != nil {
-			return fmt.Errorf("download checksums: %w", err)
-		}
-		if err := verifyChecksum(binPath, sumsPath, wantAsset); err != nil {
-			return fmt.Errorf("checksum verification failed: %w", err)
-		}
-	} else {
-		fmt.Println("⚠ SHA256SUMS.txt not found in release; skipping verification.")
+	if sumsAsset == nil {
+		return fmt.Errorf("SHA256SUMS.txt not found in release %s; refusing to install an unverified binary", rel.TagName)
+	}
+	fmt.Println("✓ Verifying SHA256...")
+	sumsPath := filepath.Join(tmpDir, sumsAsset.Name)
+	if err := downloadFile(sumsAsset.BrowserDownloadURL, sumsPath); err != nil {
+		return fmt.Errorf("download checksums: %w", err)
+	}
+	if err := verifyChecksum(binPath, sumsPath, wantAsset); err != nil {
+		return fmt.Errorf("checksum verification failed: %w", err)
 	}
 
 	if err := os.Chmod(binPath, 0o755); err != nil {
@@ -283,7 +279,6 @@ func lookupHash(sumsPath, name string) (string, error) {
 		if len(fields) < 2 {
 			continue
 		}
-		// آخرین فیلد نام فایل، اولی هش
 		fname := fields[len(fields)-1]
 		if fname == name {
 			return fields[0], nil
@@ -370,7 +365,6 @@ func compareVersions(current, latest string) (int, error) {
 func parseSemver(v string) ([3]int, error) {
 	var out [3]int
 	v = strings.TrimPrefix(strings.TrimSpace(v), "v")
-	// تگ‌هایی مثل "v0.5.0-rc1" — بخش suffix رو دور بریز
 	if i := strings.IndexAny(v, "-+"); i >= 0 {
 		v = v[:i]
 	}

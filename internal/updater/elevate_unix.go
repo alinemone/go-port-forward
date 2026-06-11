@@ -22,7 +22,6 @@ func tryElevate() error {
 		return fmt.Errorf("locate self for re-exec: %w", err)
 	}
 
-	// همان آرگومان‌های فعلی + --yes تا کاربر دوباره confirm نکنه
 	args := append([]string{exe}, elevatedArgs()...)
 
 	cmd := exec.Command(sudo, args...)
@@ -34,7 +33,6 @@ func tryElevate() error {
 		return fmt.Errorf("sudo re-exec failed: %w", err)
 	}
 
-	// elevated process خودش پیغام موفقیت رو چاپ کرده — بدون پیام اضافه خارج می‌شیم
 	os.Exit(0)
 	return nil
 }

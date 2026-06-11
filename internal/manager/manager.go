@@ -22,7 +22,6 @@ import (
 	"github.com/alinemone/go-port-forward/internal/storage"
 )
 
-// runningService نگهداری state اجرایی سرویس (جدا از model.Service)
 type runningService struct {
 	name          string
 	command       string
@@ -31,9 +30,9 @@ type runningService struct {
 	lastError     string
 	startTime     time.Time
 	restartCount  int
-	healthySince  time.Time // زمان سالم‌شدن در اجرای فعلی (برای ریست backoff)
-	lastHealthy   time.Time // آخرین باری که سالم بوده
-	lastRunStable bool      // آیا اجرای قبلی به‌اندازه‌ی کافی سالم بود
+	healthySince  time.Time
+	lastHealthy   time.Time
+	lastRunStable bool
 	logs          []model.LogEntry
 	cancel        context.CancelFunc
 	done          chan struct{}
@@ -41,7 +40,6 @@ type runningService struct {
 	mu            sync.RWMutex
 }
 
-// markHealthy وضعیت سرویس را سالم می‌کند و زمان‌های سلامت را به‌روزرسانی می‌کند
 func (s *runningService) markHealthy() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -57,7 +55,6 @@ func (s *runningService) markHealthy() {
 	s.lastHealthy = now
 }
 
-// تهیه کپی امن از وضعیت سرویس برای UI
 func (s *runningService) snapshot() model.Service {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -77,7 +74,6 @@ func (s *runningService) snapshot() model.Service {
 	}
 }
 
-// ثبت خطای سرویس و به‌روزرسانی وضعیت
 func (s *runningService) setError(message string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -86,7 +82,6 @@ func (s *runningService) setError(message string) {
 	s.status = model.StatusError
 }
 
-// افزودن لاگ به سرویس با نگه‌داری آخرین N پیام
 func (s *runningService) appendLog(message string, isError bool) {
 	message = strings.TrimSpace(message)
 	if message == "" {
@@ -107,7 +102,6 @@ func (s *runningService) appendLog(message string, isError bool) {
 	}
 }
 
-// مدیر اجرای چند سرویس هم‌زمان
 type ServiceManager struct {
 	services    map[string]*runningService
 	storage     *storage.Storage
@@ -115,7 +109,6 @@ type ServiceManager struct {
 	mu          sync.RWMutex
 }
 
-// ساخت مدیر سرویس‌ها با پشتیبانی گواهی
 func NewServiceManager(st *storage.Storage) *ServiceManager {
 	certMgr, err := cert.NewManager()
 	if err != nil {
@@ -130,17 +123,14 @@ func NewServiceManager(st *storage.Storage) *ServiceManager {
 	}
 }
 
-// ValidateServiceName اعتبارسنجی نام سرویس (نسخه‌ی اکسپورت‌شده برای استفاده در سایر پکیج‌ها)
 func ValidateServiceName(name string) error {
 	return ensureValidServiceName(name)
 }
 
-// ValidateCommand اعتبارسنجی فرمان (نسخه‌ی اکسپورت‌شده برای استفاده در سایر پکیج‌ها)
 func ValidateCommand(command string) error {
 	return ensureValidCommand(command)
 }
 
-// اعتبارسنجی نام سرویس برای امنیت
 func ensureValidServiceName(name string) error {
 	if name == "" {
 		return fmt.Errorf("service name cannot be empty")
@@ -164,7 +154,6 @@ func ensureValidServiceName(name string) error {
 	return nil
 }
 
-// اعتبارسنجی فرمان اجرا برای جلوگیری از عملیات خطرناک
 func ensureValidCommand(command string) error {
 	if command == "" {
 		return fmt.Errorf("command cannot be empty")
@@ -196,7 +185,6 @@ func ensureValidCommand(command string) error {
 	return nil
 }
 
-// شروع اجرای سرویس و ثبت در مدیر
 func (m *ServiceManager) StartService(ctx context.Context, name string) error {
 	if err := ensureValidServiceName(name); err != nil {
 		return fmt.Errorf("invalid service name: %v", err)
@@ -242,7 +230,6 @@ func (m *ServiceManager) StartService(ctx context.Context, name string) error {
 	return nil
 }
 
-// حلقه اجرای سرویس با اتصال مجدد بی‌نهایت (backoff سقف‌دار + ریست پس از سلامت پایدار)
 func (m *ServiceManager) runServiceLoop(ctx context.Context, svc *runningService) {
 	const baseBackoff = 2 * time.Second
 	const maxBackoff = 30 * time.Second
@@ -255,8 +242,6 @@ func (m *ServiceManager) runServiceLoop(ctx context.Context, svc *runningService
 			return
 		default:
 			if !isFirstRun {
-				// اگر اجرای قبلی به‌اندازه‌ی کافی سالم بود، شمارنده ریست می‌شود
-				// تا یک خطای موقتی بودجه‌ی backoff را تمام نکند.
 				svc.mu.Lock()
 				svc.restartCount = nextRestartCount(svc.restartCount, svc.lastRunStable)
 				restartCount := svc.restartCount
@@ -287,7 +272,6 @@ func (m *ServiceManager) runServiceLoop(ctx context.Context, svc *runningService
 	}
 }
 
-// اجرای یک‌باره فرمان سرویس و پایش خروجی‌ها
 func (m *ServiceManager) runServiceOnce(ctx context.Context, svc *runningService) {
 	svc.mu.Lock()
 	svc.status = model.StatusConnecting
@@ -304,14 +288,12 @@ func (m *ServiceManager) runServiceOnce(ctx context.Context, svc *runningService
 		}
 	}
 
-	// ساخت command بدون CommandContext — خودمون kill رو مدیریت میکنیم
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
 		cmd = exec.Command("cmd", "/C", commandStr)
 	} else {
 		cmd = exec.Command("sh", "-c", commandStr)
 	}
-	// ساخت process group جدید تا بتونیم کل درخت پروسه رو بکشیم
 	cmd.SysProcAttr = newProcessGroupAttr()
 
 	stdoutPipe, err := cmd.StdoutPipe()
@@ -339,12 +321,10 @@ func (m *ServiceManager) runServiceOnce(ctx context.Context, svc *runningService
 		return
 	}
 
-	// ذخیره پروسه برای kill امن
 	svc.mu.Lock()
 	svc.process = cmd.Process
 	svc.mu.Unlock()
 
-	// goroutine برای kill کردن پروسه وقتی context لغو بشه
 	go func() {
 		<-ctx.Done()
 		killProcessTree(cmd.Process)
@@ -355,7 +335,6 @@ func (m *ServiceManager) runServiceOnce(ctx context.Context, svc *runningService
 
 	err = cmd.Wait()
 
-	// آیا این اجرا به‌اندازه‌ی کافی سالم بود؟ (برای ریست backoff در حلقه)
 	svc.mu.Lock()
 	svc.lastRunStable = !svc.healthySince.IsZero() && time.Since(svc.healthySince) >= healthyResetThreshold
 	svc.process = nil
@@ -367,10 +346,8 @@ func (m *ServiceManager) runServiceOnce(ctx context.Context, svc *runningService
 	}
 }
 
-// آستانه‌ی سلامت پایدار: اگر اتصال این مدت سالم بماند، backoff ریست می‌شود
 const healthyResetThreshold = 30 * time.Second
 
-// nextRestartCount شمارنده‌ی restart بعدی را می‌دهد؛ اگر اجرای قبلی پایدار بوده از ۱ شروع می‌کند.
 func nextRestartCount(prev int, lastRunStable bool) int {
 	if lastRunStable {
 		return 1
@@ -378,7 +355,6 @@ func nextRestartCount(prev int, lastRunStable bool) int {
 	return prev + 1
 }
 
-// افزودن فلگ‌های گواهی به فرمان kubectl
 func addKubectlCertFlags(command, certPath, keyPath string) string {
 	if !strings.Contains(command, "kubectl ") {
 		return command
@@ -406,7 +382,6 @@ func addKubectlCertFlags(command, certPath, keyPath string) string {
 	return out.String()
 }
 
-// کشتن کل درخت پروسه (شامل child process‌ها)
 func killProcessTree(proc *os.Process) {
 	if proc == nil {
 		return
@@ -420,7 +395,6 @@ func killProcessTree(proc *os.Process) {
 	}
 }
 
-// صبر تا پورت آزاد بشه
 func waitForPortRelease(port string, timeout time.Duration) {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
@@ -433,7 +407,6 @@ func waitForPortRelease(port string, timeout time.Duration) {
 	}
 }
 
-// توقف یک سرویس در حال اجرا
 func (m *ServiceManager) StopService(name string) {
 	m.mu.Lock()
 	svc, exists := m.services[name]
@@ -448,7 +421,6 @@ func (m *ServiceManager) StopService(name string) {
 		svc.cancel()
 	}
 
-	// منتظر پایان واقعی goroutine
 	if svc.done != nil {
 		select {
 		case <-svc.done:
@@ -461,7 +433,6 @@ func (m *ServiceManager) StopService(name string) {
 	}
 }
 
-// راه‌اندازی مجدد یک سرویس بدون حذف از map (برای جلوگیری از پرش UI)
 func (m *ServiceManager) restartInPlace(ctx context.Context, name string) {
 	m.mu.RLock()
 	svc, exists := m.services[name]
@@ -510,13 +481,11 @@ func (m *ServiceManager) restartInPlace(ctx context.Context, name string) {
 	}()
 }
 
-// RestartService راه‌اندازی مجدد یک سرویس
 func (m *ServiceManager) RestartService(ctx context.Context, name string) error {
 	go m.restartInPlace(ctx, name)
 	return nil
 }
 
-// RestartAllServices راه‌اندازی مجدد همه سرویس‌های در حال اجرا
 func (m *ServiceManager) RestartAllServices(ctx context.Context) {
 	m.mu.RLock()
 	names := make([]string, 0, len(m.services))
@@ -530,7 +499,6 @@ func (m *ServiceManager) RestartAllServices(ctx context.Context) {
 	}
 }
 
-// StartStoredService افزودن سرویس ذخیره‌شده به اجرای فعلی
 func (m *ServiceManager) StartStoredService(ctx context.Context, name string) error {
 	m.mu.RLock()
 	_, exists := m.services[name]
@@ -547,7 +515,6 @@ func (m *ServiceManager) StartStoredService(ctx context.Context, name string) er
 	return m.StartService(ctx, name)
 }
 
-// StopAllServices توقف همه سرویس‌ها و انتظار برای پایان واقعی
 func (m *ServiceManager) StopAllServices() {
 	m.mu.Lock()
 	services := make([]*runningService, 0, len(m.services))
@@ -574,7 +541,6 @@ func (m *ServiceManager) StopAllServices() {
 	}
 }
 
-// ListServiceStates دریافت وضعیت همه سرویس‌ها برای نمایش
 func (m *ServiceManager) ListServiceStates() []model.Service {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -591,7 +557,6 @@ func (m *ServiceManager) ListServiceStates() []model.Service {
 	return states
 }
 
-// خواندن خطوط خروجی و ثبت در لاگ سرویس
 func (m *ServiceManager) streamOutput(svc *runningService, reader io.Reader, isError bool) {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
