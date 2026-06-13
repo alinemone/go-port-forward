@@ -64,31 +64,44 @@ type Controller interface {
 }
 
 type UI struct {
-	manager           Controller
-	services          []model.Service
-	cursorIndex       int
-	quitting          bool
-	width             int
-	height            int
-	viewport          viewport.Model
-	ready             bool
-	ctx               context.Context
-	addMode           bool
-	addCandidates     []string
-	addCursor         int
-	addSelected       map[string]bool
-	addFormMode       string
-	addFormName       textinput.Model
-	addFormCmd        textinput.Model
-	addFormFocus      int // 0 = name, 1 = command
-	addFormOrig       string
-	addFormErr        string
-	addConfirmDelete  string
-	editStatus        string
-	editStatusSeq     int
-	logFilterSelected bool
-	spinnerFrame      int
-	tableOffset       int
+	manager            Controller
+	services           []model.Service
+	cursorIndex        int
+	quitting           bool
+	width              int
+	height             int
+	viewport           viewport.Model
+	ready              bool
+	ctx                context.Context
+	addMode            bool
+	addCandidates      []string
+	addCursor          int
+	addSelected        map[string]bool
+	addFormMode        string
+	addFormName        textinput.Model
+	addFormCmd         textinput.Model
+	addFormFocus       int // 0 = name, 1 = command
+	addFormOrig        string
+	addFormErr         string
+	addConfirmDelete   string
+	groupMode          bool
+	groups             map[string][]string
+	groupNames         []string
+	groupCursor        int
+	groupConfirmDelete string
+	groupFormMode      string // "" = list, "new", "edit"
+	groupFormOrig      string
+	groupFormName      textinput.Model
+	groupFormErr       string
+	groupFormFocus     int // 0 = name, 1 = services list
+	groupFormServices  []string
+	groupFormSelected  map[string]bool
+	groupFormSvcCursor int
+	editStatus         string
+	editStatusSeq      int
+	logFilterSelected  bool
+	spinnerFrame       int
+	tableOffset        int
 }
 
 const uiTickInterval = 500 * time.Millisecond
@@ -113,7 +126,7 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		u.width = msg.Width
 		u.height = msg.Height
 
-		viewportHeight := calculateViewportHeight(len(u.services), u.height)
+		viewportHeight := calculateViewportHeight(len(u.services), u.height, u.chromeBelowLog())
 		if !u.ready {
 			u.viewport = viewport.New(viewport.WithWidth(msg.Width), viewport.WithHeight(viewportHeight))
 			u.viewport.YPosition = 0
@@ -129,8 +142,13 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			u.addFormCmd.SetWidth(inputWidth)
 		}
 
+		if u.groupMode && u.groupFormMode != "" {
+			u.groupFormName.SetWidth(u.formInputWidth())
+		}
+
 	case tea.MouseWheelMsg:
-		if u.addMode {
+		switch {
+		case u.addMode:
 			if u.addFormMode == "" {
 				switch msg.Button {
 				case tea.MouseWheelUp:
@@ -143,7 +161,20 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 			}
-		} else {
+		case u.groupMode:
+			if u.groupFormMode == "" {
+				switch msg.Button {
+				case tea.MouseWheelUp:
+					if u.groupCursor > 0 {
+						u.groupCursor--
+					}
+				case tea.MouseWheelDown:
+					if u.groupCursor < len(u.groupNames)-1 {
+						u.groupCursor++
+					}
+				}
+			}
+		default:
 			u.viewport, cmd = u.viewport.Update(msg)
 		}
 
@@ -158,6 +189,9 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if u.addMode {
 			return u.updateAddMode(msg)
+		}
+		if u.groupMode {
+			return u.updateGroupMode(msg)
 		}
 
 		switch key {
@@ -206,6 +240,9 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "a":
 			u.enterAddMode()
+
+		case "g":
+			u.enterGroupMode()
 
 		case "c":
 			return u, u.launchEditor()
@@ -360,6 +397,13 @@ func (u *UI) viewContent() string {
 			return u.renderServiceForm()
 		}
 		return u.renderAddServiceOverlay()
+	}
+
+	if u.groupMode {
+		if u.groupFormMode != "" {
+			return u.renderGroupForm()
+		}
+		return u.renderGroupOverlay()
 	}
 
 	u.ensureViewportSize()
@@ -696,6 +740,267 @@ func (u *UI) focusCandidate(name string) {
 	}
 }
 
+func (u *UI) enterGroupMode() {
+	u.groupMode = true
+	u.groupFormMode = ""
+	u.groupFormErr = ""
+	u.groupConfirmDelete = ""
+	u.groupCursor = 0
+	u.refreshGroupNames()
+}
+
+func (u *UI) exitGroupMode() {
+	u.groupMode = false
+	u.groupFormMode = ""
+	u.groupFormErr = ""
+	u.groupConfirmDelete = ""
+	u.groups = nil
+	u.groupNames = nil
+	u.groupCursor = 0
+	u.groupFormServices = nil
+	u.groupFormSelected = nil
+}
+
+func (u *UI) refreshGroupNames() {
+	groups, err := storage.NewStorage().ListGroups()
+	if err != nil {
+		return
+	}
+	names := make([]string, 0, len(groups))
+	for name := range groups {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	u.groups = groups
+	u.groupNames = names
+	if u.groupCursor >= len(u.groupNames) {
+		u.groupCursor = len(u.groupNames) - 1
+	}
+	if u.groupCursor < 0 {
+		u.groupCursor = 0
+	}
+}
+
+func (u *UI) focusGroup(name string) {
+	for i, g := range u.groupNames {
+		if g == name {
+			u.groupCursor = i
+			return
+		}
+	}
+}
+
+func (u *UI) updateGroupMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if u.groupFormMode != "" {
+		return u.updateGroupForm(msg)
+	}
+
+	keyRaw := msg.String()
+	key := keyRaw
+	if keyRaw != "space" {
+		key = stringutil.NormalizeToken(keyRaw)
+	}
+
+	if u.groupConfirmDelete != "" {
+		switch key {
+		case "y", "enter":
+			name := u.groupConfirmDelete
+			u.groupConfirmDelete = ""
+			if err := storage.NewStorage().DeleteGroup(name); err != nil {
+				u.groupFormErr = fmt.Sprintf("delete failed: %v", err)
+				return u, nil
+			}
+			u.groupFormErr = ""
+			u.refreshGroupNames()
+		case "n", "esc":
+			u.groupConfirmDelete = ""
+		}
+		return u, nil
+	}
+
+	switch key {
+	case "esc":
+		u.exitGroupMode()
+	case "up", "k":
+		if u.groupCursor > 0 {
+			u.groupCursor--
+		}
+	case "down", "j":
+		if u.groupCursor < len(u.groupNames)-1 {
+			u.groupCursor++
+		}
+	case "n":
+		return u, u.openNewGroupForm()
+	case "e":
+		return u, u.openEditGroupForm()
+	case "d":
+		if u.groupCursor >= 0 && u.groupCursor < len(u.groupNames) {
+			u.groupFormErr = ""
+			u.groupConfirmDelete = u.groupNames[u.groupCursor]
+		}
+	case "enter":
+		if u.groupCursor >= 0 && u.groupCursor < len(u.groupNames) {
+			name := u.groupNames[u.groupCursor]
+			members := u.groups[name]
+			running := u.runningNameSet()
+			for _, svc := range members {
+				if !running[svc] {
+					_ = u.manager.StartStoredService(u.ctx, svc)
+				}
+			}
+			u.exitGroupMode()
+		}
+	}
+	return u, nil
+}
+
+func (u *UI) openNewGroupForm() tea.Cmd {
+	names, err := storage.NewStorage().ListServiceNames()
+	if err != nil {
+		return nil
+	}
+	u.groupFormMode = "new"
+	u.groupFormOrig = ""
+	u.groupFormErr = ""
+	u.groupFormName = newServiceTextInput("e.g. backend", "", u.formInputWidth())
+	u.groupFormServices = names
+	u.groupFormSelected = make(map[string]bool)
+	u.groupFormFocus = 0
+	u.groupFormSvcCursor = 0
+	return u.groupFormName.Focus()
+}
+
+func (u *UI) openEditGroupForm() tea.Cmd {
+	if u.groupCursor < 0 || u.groupCursor >= len(u.groupNames) {
+		return nil
+	}
+	name := u.groupNames[u.groupCursor]
+	names, err := storage.NewStorage().ListServiceNames()
+	if err != nil {
+		return nil
+	}
+	u.groupFormMode = "edit"
+	u.groupFormOrig = name
+	u.groupFormErr = ""
+	u.groupFormName = newServiceTextInput("group name", name, u.formInputWidth())
+	u.groupFormServices = names
+	u.groupFormSelected = make(map[string]bool)
+	for _, svc := range u.groups[name] {
+		u.groupFormSelected[svc] = true
+	}
+	u.groupFormFocus = 0
+	u.groupFormSvcCursor = 0
+	return u.groupFormName.Focus()
+}
+
+func (u *UI) closeGroupForm() {
+	u.groupFormMode = ""
+	u.groupFormErr = ""
+	u.groupFormName.Blur()
+}
+
+func (u *UI) toggleGroupFormFocus() tea.Cmd {
+	if u.groupFormFocus == 0 {
+		u.groupFormFocus = 1
+		u.groupFormName.Blur()
+		return nil
+	}
+	u.groupFormFocus = 0
+	return u.groupFormName.Focus()
+}
+
+func (u *UI) updateGroupForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	keyRaw := msg.String()
+	key := keyRaw
+	if keyRaw != "space" {
+		key = stringutil.NormalizeToken(keyRaw)
+	}
+
+	switch key {
+	case "esc":
+		u.closeGroupForm()
+		return u, nil
+	case "tab", "shift+tab":
+		return u, u.toggleGroupFormFocus()
+	case "enter":
+		return u.submitGroupForm()
+	}
+
+	if u.groupFormFocus == 1 {
+		switch key {
+		case "up", "k":
+			if u.groupFormSvcCursor > 0 {
+				u.groupFormSvcCursor--
+			}
+		case "down", "j":
+			if u.groupFormSvcCursor < len(u.groupFormServices)-1 {
+				u.groupFormSvcCursor++
+			}
+		case "space":
+			if u.groupFormSvcCursor >= 0 && u.groupFormSvcCursor < len(u.groupFormServices) {
+				svc := u.groupFormServices[u.groupFormSvcCursor]
+				u.groupFormSelected[svc] = !u.groupFormSelected[svc]
+			}
+		}
+		return u, nil
+	}
+
+	var cmd tea.Cmd
+	u.groupFormName, cmd = u.groupFormName.Update(msg)
+	return u, cmd
+}
+
+func (u *UI) submitGroupForm() (tea.Model, tea.Cmd) {
+	name := strings.TrimSpace(u.groupFormName.Value())
+	if err := manager.ValidateServiceName(name); err != nil {
+		u.groupFormErr = err.Error()
+		return u, nil
+	}
+
+	selected := make([]string, 0, len(u.groupFormSelected))
+	for _, svc := range u.groupFormServices {
+		if u.groupFormSelected[svc] {
+			selected = append(selected, svc)
+		}
+	}
+
+	st := storage.NewStorage()
+	var status string
+
+	switch u.groupFormMode {
+	case "new":
+		if _, exists := u.groups[name]; exists {
+			u.groupFormErr = fmt.Sprintf("a group named '%s' already exists", name)
+			return u, nil
+		}
+		if err := st.AddGroup(name, selected); err != nil {
+			u.groupFormErr = err.Error()
+			return u, nil
+		}
+		status = fmt.Sprintf("✓ Group '%s' created with %d service(s)", name, len(selected))
+
+	case "edit":
+		orig := u.groupFormOrig
+		if name != orig {
+			if err := st.RenameGroup(orig, name); err != nil {
+				u.groupFormErr = err.Error()
+				return u, nil
+			}
+		}
+		// AddGroup overwrites the membership of an existing group.
+		if err := st.AddGroup(name, selected); err != nil {
+			u.groupFormErr = err.Error()
+			return u, nil
+		}
+		status = fmt.Sprintf("✓ Group '%s' updated (%d service(s))", name, len(selected))
+	}
+
+	u.closeGroupForm()
+	u.refreshGroupNames()
+	u.focusGroup(name)
+	return u, u.setStatus(status)
+}
+
 func (u *UI) ensureCursorInRange() {
 	if u.cursorIndex >= len(u.services) && len(u.services) > 0 {
 		u.cursorIndex = len(u.services) - 1
@@ -709,12 +1014,12 @@ func maxVisibleServices(totalHeight int) int {
 	if totalHeight <= 0 {
 		return 8
 	}
-	cap := totalHeight / 3
+	cap := totalHeight / 2
 	if cap < 3 {
 		cap = 3
 	}
-	if cap > 15 {
-		cap = 15
+	if cap > 20 {
+		cap = 20
 	}
 	return cap
 }
@@ -785,7 +1090,7 @@ func (u *UI) ensureViewportSize() {
 		return
 	}
 
-	viewportHeight := calculateViewportHeight(len(u.services), u.height)
+	viewportHeight := calculateViewportHeight(len(u.services), u.height, u.chromeBelowLog())
 	if u.viewport.Height() != viewportHeight {
 		u.viewport.SetHeight(viewportHeight)
 	}
@@ -794,7 +1099,22 @@ func (u *UI) ensureViewportSize() {
 	}
 }
 
-func calculateViewportHeight(serviceCount, totalHeight int) int {
+// chromeBelowLog returns the number of lines occupied below the log box: the
+// help bar (content rows + its border) plus the optional status line. The help
+// bar can wrap to multiple rows on narrow terminals, so this must be measured,
+// not assumed, or the bottom border gets clipped off-screen.
+func (u *UI) chromeBelowLog() int {
+	h := len(helpLines(u.width, u.logScopeLabel())) + 2 // help box border
+	if u.editStatus != "" {
+		h++
+	}
+	return h
+}
+
+func calculateViewportHeight(serviceCount, totalHeight, chromeBelow int) int {
+	if chromeBelow < 3 {
+		chromeBelow = 3
+	}
 	visible := serviceCount
 	maxVis := maxVisibleServices(totalHeight)
 	if visible > maxVis {
@@ -807,7 +1127,7 @@ func calculateViewportHeight(serviceCount, totalHeight int) int {
 	if serviceCount > maxVis {
 		tableLines++
 	}
-	overhead := tableLines + 2 + 3
+	overhead := tableLines + 2 + chromeBelow
 	viewportHeight := totalHeight - overhead
 	if viewportHeight < 3 {
 		viewportHeight = 3
@@ -995,9 +1315,18 @@ func renderServiceTable(services []model.Service, selectedIndex, offset, maxVisi
 	if len(services) > maxVisible {
 		above := start
 		below := len(services) - end
-		indicator := fmt.Sprintf("↑ %d above • ↓ %d below  (%d–%d of %d)", above, below, start+1, end, len(services))
+		var parts []string
+		if above > 0 {
+			parts = append(parts, fmt.Sprintf("↑ %d more above", above))
+		}
+		if below > 0 {
+			parts = append(parts, fmt.Sprintf("↓ %d more below", below))
+		}
+		indicator := fmt.Sprintf("%s   (%d–%d of %d • ↑↓ to scroll)",
+			strings.Join(parts, "   "), start+1, end, len(services))
 		rows = append(rows, lipgloss.NewStyle().
-			Foreground(colorMuted).
+			Foreground(colorWarn).
+			Bold(true).
 			Render(indicator))
 	}
 
@@ -1403,6 +1732,237 @@ func (u *UI) renderServiceForm() string {
 	return lipgloss.JoinVertical(lipgloss.Left, box, instructionStyled)
 }
 
+func summarizeMembers(members []string) string {
+	if len(members) == 0 {
+		return "(empty)"
+	}
+	joined := strings.Join(members, ", ")
+	if len(joined) > 48 {
+		return fmt.Sprintf("%d services", len(members))
+	}
+	return joined
+}
+
+func (u *UI) renderGroupOverlay() string {
+	width := u.width
+	if width <= 0 {
+		width = 120
+	}
+	if width < 60 {
+		width = 60
+	}
+
+	maxNameLen := 7
+	for _, name := range u.groupNames {
+		if len(name) > maxNameLen {
+			maxNameLen = len(name)
+		}
+	}
+	if maxNameLen > 30 {
+		maxNameLen = 30
+	}
+
+	rows := make([]string, 0, len(u.groupNames)+3)
+	header := lipgloss.NewStyle().
+		Foreground(colorHeading).
+		Bold(true).
+		Render(fmt.Sprintf("%-*s  %s", maxNameLen, "GROUP", "SERVICES"))
+	rows = append(rows, header)
+
+	sepWidth := width - 6
+	if sepWidth < 50 {
+		sepWidth = 50
+	}
+	if sepWidth > 200 {
+		sepWidth = 200
+	}
+	rows = append(rows, lipgloss.NewStyle().Foreground(colorBorder).Render(strings.Repeat("─", sepWidth)))
+
+	if len(u.groupNames) == 0 {
+		rows = append(rows, lipgloss.NewStyle().
+			Foreground(colorMuted).
+			Italic(true).
+			Render("No groups yet — press 'n' to create one"))
+	}
+
+	for i, name := range u.groupNames {
+		selected := i == u.groupCursor
+		highlight := "  "
+		if selected {
+			highlight = lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("► ")
+		}
+
+		displayName := name
+		if len(displayName) > maxNameLen {
+			displayName = displayName[:maxNameLen-3] + "..."
+		}
+		nameColor := colorText
+		if selected {
+			nameColor = colorAccent
+		}
+		styledName := lipgloss.NewStyle().
+			Foreground(nameColor).
+			Bold(true).
+			Render(fmt.Sprintf("%-*s", maxNameLen, displayName))
+
+		styledMembers := lipgloss.NewStyle().
+			Foreground(colorMuted).
+			Render(summarizeMembers(u.groups[name]))
+
+		rows = append(rows, highlight+styledName+"  "+styledMembers)
+	}
+
+	table := lipgloss.JoinVertical(lipgloss.Left, rows...)
+	style := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorBorder).
+		Padding(0, 1).
+		Width(width - 2)
+
+	overlayBox := style.Render(table)
+
+	sections := []string{overlayBox}
+
+	if u.groupConfirmDelete != "" {
+		confirmText := lipgloss.NewStyle().
+			Foreground(colorWarn).
+			Bold(true).
+			Render(fmt.Sprintf("Delete group '%s'? Member services are kept.", u.groupConfirmDelete))
+		confirmKeys := renderActionChips([][2]string{
+			{"y", "confirm"},
+			{"n", "cancel"},
+		})
+		confirmBody := lipgloss.JoinVertical(lipgloss.Left, confirmText, "", confirmKeys)
+		confirmBox := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(colorError).
+			Padding(0, 1).
+			Width(width - 2).
+			Render(confirmBody)
+		sections = append(sections, confirmBox)
+	} else if u.groupFormErr != "" {
+		sections = append(sections, lipgloss.NewStyle().Foreground(colorError).Render("✗ "+u.groupFormErr))
+	}
+
+	instructionStyled := renderActionChips([][2]string{
+		{"↑↓", "navigate"},
+		{"Enter", "run"},
+		{"n", "new"},
+		{"e", "edit"},
+		{"d", "delete"},
+		{"Esc", "cancel"},
+	})
+	sections = append(sections, instructionStyled)
+
+	return lipgloss.JoinVertical(lipgloss.Left, sections...)
+}
+
+func (u *UI) renderGroupForm() string {
+	width := u.width
+	if width <= 0 {
+		width = 120
+	}
+	if width < 60 {
+		width = 60
+	}
+
+	title := "New group"
+	if u.groupFormMode == "edit" {
+		title = fmt.Sprintf("Edit group: %s", u.groupFormOrig)
+	}
+	titleStyled := lipgloss.NewStyle().
+		Foreground(colorAccent).
+		Bold(true).
+		Render(title)
+
+	labelStyle := lipgloss.NewStyle().Foreground(colorMuted)
+	activeLabel := lipgloss.NewStyle().Foreground(colorAccentAlt).Bold(true)
+
+	nameLabel := labelStyle.Render("  Name:")
+	servicesLabel := labelStyle.Render("  Services:")
+	if u.groupFormFocus == 0 {
+		nameLabel = activeLabel.Render("► Name:")
+	} else {
+		servicesLabel = activeLabel.Render("► Services:")
+	}
+
+	rows := []string{
+		titleStyled,
+		"",
+		nameLabel,
+		"  " + u.groupFormName.View(),
+		"",
+		servicesLabel,
+	}
+
+	if len(u.groupFormServices) == 0 {
+		rows = append(rows, lipgloss.NewStyle().
+			Foreground(colorMuted).
+			Italic(true).
+			Render("  No services available — create services first"))
+	} else {
+		const maxVisible = 20
+		start := 0
+		if u.groupFormSvcCursor >= maxVisible {
+			start = u.groupFormSvcCursor - maxVisible + 1
+		}
+		end := start + maxVisible
+		if end > len(u.groupFormServices) {
+			end = len(u.groupFormServices)
+		}
+
+		for i := start; i < end; i++ {
+			svc := u.groupFormServices[i]
+			onCursor := u.groupFormFocus == 1 && i == u.groupFormSvcCursor
+			marker := "  "
+			if onCursor {
+				marker = lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("► ")
+			}
+			checkbox := "[ ]"
+			if u.groupFormSelected[svc] {
+				checkbox = "[✓]"
+			}
+			svcColor := colorText
+			if onCursor {
+				svcColor = colorAccent
+			}
+			line := marker +
+				lipgloss.NewStyle().Foreground(colorMuted).Render(checkbox+" ") +
+				lipgloss.NewStyle().Foreground(svcColor).Render(svc)
+			rows = append(rows, line)
+		}
+
+		if len(u.groupFormServices) > maxVisible {
+			rows = append(rows, lipgloss.NewStyle().
+				Foreground(colorMuted).
+				Render(fmt.Sprintf("  (%d–%d of %d)", start+1, end, len(u.groupFormServices))))
+		}
+	}
+
+	if u.groupFormErr != "" {
+		rows = append(rows, "", lipgloss.NewStyle().Foreground(colorError).Render("✗ "+u.groupFormErr))
+	}
+
+	body := lipgloss.JoinVertical(lipgloss.Left, rows...)
+	style := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorBorder).
+		Padding(0, 1).
+		Width(width - 2)
+
+	box := style.Render(body)
+
+	instructionStyled := renderActionChips([][2]string{
+		{"Tab", "switch field"},
+		{"↑↓", "navigate"},
+		{"Space", "toggle"},
+		{"Enter", "save"},
+		{"Esc", "back"},
+	})
+
+	return lipgloss.JoinVertical(lipgloss.Left, box, instructionStyled)
+}
+
 func renderActionChips(pairs [][2]string) string {
 	keyStyle := lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
 	descStyle := lipgloss.NewStyle().Foreground(colorMuted)
@@ -1414,50 +1974,157 @@ func renderActionChips(pairs [][2]string) string {
 	return strings.Join(chips, sep)
 }
 
-func renderHelp(width int, logScope string) string {
+// helpLines builds the wrapped, balanced content rows for the help bar (without
+// the surrounding border). The height layout depends on len(helpLines(...)), so
+// renderHelp must render exactly these lines.
+func helpLines(width int, logScope string) []string {
 	if width < 60 {
 		width = 60
 	}
 
 	keyStyle := lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
 	descStyle := lipgloss.NewStyle().Foreground(colorMuted)
-	sep := descStyle.Render("  •  ")
-	chip := func(k, d string) string {
-		return keyStyle.Render(k) + descStyle.Render(" "+d)
-	}
+	const sepText = "  •  "
+	sepStyled := descStyle.Render(sepText)
+	sepW := lipgloss.Width(sepText)
 
-	var chips []string
+	type chip struct{ k, d string }
+	var chips []chip
 	if width < 90 {
-		chips = []string{
-			chip("↑↓", "move"),
-			chip("l", "logs="+logScope),
-			chip("a", "add"),
-			chip("c", "config"),
-			chip("r", "restart"),
-			chip("s", "stop"),
-			chip("q", "quit"),
+		chips = []chip{
+			{"↑↓", "move"},
+			{"l", "logs=" + logScope},
+			{"a", "add"},
+			{"g", "group"},
+			{"c", "config"},
+			{"r", "restart"},
+			{"s", "stop"},
+			{"q", "quit"},
 		}
 	} else {
-		chips = []string{
-			chip("↑↓/j/k", "move"),
-			chip("l", "logs="+logScope),
-			chip("a", "add/edit"),
-			chip("c", "config"),
-			chip("r", "restart"),
-			chip("^r", "restart all"),
-			chip("s", "stop"),
-			chip("q", "quit"),
+		chips = []chip{
+			{"↑↓/j/k", "move"},
+			{"l", "logs=" + logScope},
+			{"a", "add/edit"},
+			{"g", "group"},
+			{"c", "config"},
+			{"r", "restart"},
+			{"^r", "restart all"},
+			{"s", "stop"},
+			{"q", "quit"},
 		}
 	}
-	help := strings.Join(chips, sep)
+
+	n := len(chips)
+	styled := make([]string, n)
+	widths := make([]int, n)
+	for i, c := range chips {
+		styled[i] = keyStyle.Render(c.k) + descStyle.Render(" "+c.d)
+		widths[i] = lipgloss.Width(c.k + " " + c.d)
+	}
+
+	inner := width - 4 // 2 border + 2 padding
+	if inner < 10 {
+		inner = 10
+	}
+
+	// Minimum number of lines a greedy fit needs at this width.
+	minLines := 1
+	lineW := 0
+	for i, w := range widths {
+		if i == 0 {
+			lineW = w
+			continue
+		}
+		if lineW+sepW+w > inner {
+			minLines++
+			lineW = w
+		} else {
+			lineW += sepW + w
+		}
+	}
+
+	// Split into minLines rows of (almost) equal chip count so the rows look
+	// balanced (e.g. 4+4 instead of 7+1). Fall back to greedy if an even
+	// split would overflow.
+	return balancedHelpLines(styled, widths, sepStyled, sepW, inner, minLines)
+}
+
+func renderHelp(width int, logScope string) string {
+	boxWidth := width
+	if boxWidth < 60 {
+		boxWidth = 60
+	}
+
+	help := strings.Join(helpLines(width, logScope), "\n")
 
 	style := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colorBorder).
 		Padding(0, 1).
-		Width(width - 2)
+		Width(boxWidth - 2)
 
 	return style.Render(help)
+}
+
+// balancedHelpLines splits chips into L contiguous rows of as-equal-as-possible
+// count. If any such row would exceed inner width, it falls back to greedy
+// packing (which fits by construction).
+func balancedHelpLines(styled []string, widths []int, sepStyled string, sepW, inner, L int) []string {
+	n := len(styled)
+	if L < 1 {
+		L = 1
+	}
+
+	base, rem := n/L, n%L
+	groups := make([][]string, 0, L)
+	idx := 0
+	for g := 0; g < L; g++ {
+		cnt := base
+		if g < rem {
+			cnt++
+		}
+		w := 0
+		for j := idx; j < idx+cnt; j++ {
+			w += widths[j]
+			if j > idx {
+				w += sepW
+			}
+		}
+		if w > inner {
+			return greedyHelpLines(styled, widths, sepStyled, sepW, inner)
+		}
+		groups = append(groups, styled[idx:idx+cnt])
+		idx += cnt
+	}
+
+	out := make([]string, 0, len(groups))
+	for _, g := range groups {
+		out = append(out, strings.Join(g, sepStyled))
+	}
+	return out
+}
+
+func greedyHelpLines(styled []string, widths []int, sepStyled string, sepW, inner int) []string {
+	var lines []string
+	var line string
+	lineW := 0
+	for i, s := range styled {
+		switch {
+		case line == "":
+			line, lineW = s, widths[i]
+		case lineW+sepW+widths[i] > inner:
+			lines = append(lines, line)
+			line, lineW = s, widths[i]
+		default:
+			line += sepStyled + s
+			lineW += sepW + widths[i]
+		}
+	}
+	if line != "" {
+		lines = append(lines, line)
+	}
+	return lines
 }
 
 func (u *UI) renderShutdownScreen() string {
