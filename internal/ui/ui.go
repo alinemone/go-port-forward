@@ -83,6 +83,7 @@ type UI struct {
 	addFormFocus      int // 0 = name, 1 = command
 	addFormOrig       string
 	addFormErr        string
+	addConfirmDelete  string
 	editStatus        string
 	editStatusSeq     int
 	logFilterSelected bool
@@ -405,6 +406,7 @@ func (u *UI) enterAddMode() {
 	u.addMode = true
 	u.addFormMode = ""
 	u.addFormErr = ""
+	u.addConfirmDelete = ""
 	u.addCandidates = allServices
 	u.addCursor = 0
 	u.addSelected = make(map[string]bool)
@@ -414,6 +416,7 @@ func (u *UI) exitAddMode() {
 	u.addMode = false
 	u.addFormMode = ""
 	u.addFormErr = ""
+	u.addConfirmDelete = ""
 	u.addCandidates = nil
 	u.addCursor = 0
 	u.addSelected = nil
@@ -437,6 +440,24 @@ func (u *UI) updateAddMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if keyRaw != "space" {
 		key = stringutil.NormalizeToken(keyRaw)
 	}
+
+	if u.addConfirmDelete != "" {
+		switch key {
+		case "y", "enter":
+			name := u.addConfirmDelete
+			u.addConfirmDelete = ""
+			if err := storage.NewStorage().DeleteService(name); err != nil {
+				u.addFormErr = fmt.Sprintf("delete failed: %v", err)
+				return u, nil
+			}
+			u.addFormErr = ""
+			u.refreshAddCandidates()
+		case "n", "esc":
+			u.addConfirmDelete = ""
+		}
+		return u, nil
+	}
+
 	switch key {
 	case "esc":
 		u.exitAddMode()
@@ -447,6 +468,16 @@ func (u *UI) updateAddMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "down", "j":
 		if u.addCursor < len(u.addCandidates)-1 {
 			u.addCursor++
+		}
+	case "d":
+		if u.addCursor >= 0 && u.addCursor < len(u.addCandidates) {
+			name := u.addCandidates[u.addCursor]
+			if u.runningNameSet()[name] {
+				u.addFormErr = fmt.Sprintf("stop '%s' before deleting", name)
+			} else {
+				u.addFormErr = ""
+				u.addConfirmDelete = name
+			}
 		}
 	case "space":
 		if u.addCursor >= 0 && u.addCursor < len(u.addCandidates) {
@@ -1273,12 +1304,42 @@ func (u *UI) renderAddServiceOverlay() string {
 
 	overlayBox := style.Render(table)
 
-	instructions := "↑↓:navigate • Space:select • Enter:run • n:new • e:edit • c:config in editor • Esc:cancel"
-	instructionStyled := lipgloss.NewStyle().
-		Foreground(colorMuted).
-		Render(instructions)
+	sections := []string{overlayBox}
 
-	return lipgloss.JoinVertical(lipgloss.Left, overlayBox, instructionStyled)
+	if u.addConfirmDelete != "" {
+		confirmText := lipgloss.NewStyle().
+			Foreground(colorWarn).
+			Bold(true).
+			Render(fmt.Sprintf("Delete service '%s'? This cannot be undone.", u.addConfirmDelete))
+		confirmKeys := renderActionChips([][2]string{
+			{"y", "confirm"},
+			{"n", "cancel"},
+		})
+		confirmBody := lipgloss.JoinVertical(lipgloss.Left, confirmText, "", confirmKeys)
+		confirmBox := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(colorError).
+			Padding(0, 1).
+			Width(width - 2).
+			Render(confirmBody)
+		sections = append(sections, confirmBox)
+	} else if u.addFormErr != "" {
+		sections = append(sections, lipgloss.NewStyle().Foreground(colorError).Render("✗ "+u.addFormErr))
+	}
+
+	instructionStyled := renderActionChips([][2]string{
+		{"↑↓", "navigate"},
+		{"Space", "select"},
+		{"Enter", "run"},
+		{"n", "new"},
+		{"e", "edit"},
+		{"d", "delete"},
+		{"c", "config"},
+		{"Esc", "cancel"},
+	})
+	sections = append(sections, instructionStyled)
+
+	return lipgloss.JoinVertical(lipgloss.Left, sections...)
 }
 
 func (u *UI) renderServiceForm() string {
@@ -1333,12 +1394,24 @@ func (u *UI) renderServiceForm() string {
 
 	box := style.Render(body)
 
-	instructions := "Tab/↑↓:switch field • Enter:save • Esc:back"
-	instructionStyled := lipgloss.NewStyle().
-		Foreground(colorMuted).
-		Render(instructions)
+	instructionStyled := renderActionChips([][2]string{
+		{"Tab/↑↓", "switch field"},
+		{"Enter", "save"},
+		{"Esc", "back"},
+	})
 
 	return lipgloss.JoinVertical(lipgloss.Left, box, instructionStyled)
+}
+
+func renderActionChips(pairs [][2]string) string {
+	keyStyle := lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
+	descStyle := lipgloss.NewStyle().Foreground(colorMuted)
+	sep := descStyle.Render("  •  ")
+	chips := make([]string, 0, len(pairs))
+	for _, p := range pairs {
+		chips = append(chips, keyStyle.Render(p[0])+descStyle.Render(" "+p[1]))
+	}
+	return strings.Join(chips, sep)
 }
 
 func renderHelp(width int, logScope string) string {
