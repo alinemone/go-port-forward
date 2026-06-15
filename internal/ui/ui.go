@@ -54,6 +54,26 @@ var (
 	colorSelected  = lipgloss.Color("#1E3A5F")
 )
 
+type manageRowKind int
+
+const (
+	rowHeaderGroups manageRowKind = iota
+	rowHeaderServices
+	rowGroup
+	rowService
+	rowEmptyGroups
+	rowEmptyServices
+)
+
+type manageRow struct {
+	kind manageRowKind
+	name string
+}
+
+func (r manageRow) selectable() bool {
+	return r.kind == rowGroup || r.kind == rowService
+}
+
 type Controller interface {
 	ListServiceStates() []model.Service
 	StartStoredService(ctx context.Context, name string) error
@@ -64,31 +84,23 @@ type Controller interface {
 }
 
 type UI struct {
-	manager            Controller
-	services           []model.Service
-	cursorIndex        int
-	quitting           bool
-	width              int
-	height             int
-	viewport           viewport.Model
-	ready              bool
-	ctx                context.Context
-	addMode            bool
-	addCandidates      []string
-	addCursor          int
-	addSelected        map[string]bool
-	addFormMode        string
-	addFormName        textinput.Model
-	addFormCmd         textinput.Model
-	addFormFocus       int // 0 = name, 1 = command
-	addFormOrig        string
-	addFormErr         string
-	addConfirmDelete   string
-	groupMode          bool
-	groups             map[string][]string
-	groupNames         []string
-	groupCursor        int
-	groupConfirmDelete string
+	manager     Controller
+	services    []model.Service
+	cursorIndex int
+	quitting    bool
+	width       int
+	height      int
+	viewport    viewport.Model
+	ready       bool
+	ctx         context.Context
+	// service form (new/edit) — shared, launched from the manage overlay
+	addFormMode  string
+	addFormName  textinput.Model
+	addFormCmd   textinput.Model
+	addFormFocus int // 0 = name, 1 = command
+	addFormOrig  string
+	addFormErr   string
+	// group form (new/edit) — shared, launched from the manage overlay
 	groupFormMode      string // "" = list, "new", "edit"
 	groupFormOrig      string
 	groupFormName      textinput.Model
@@ -97,11 +109,26 @@ type UI struct {
 	groupFormServices  []string
 	groupFormSelected  map[string]bool
 	groupFormSvcCursor int
-	editStatus         string
-	editStatusSeq      int
-	logFilterSelected  bool
-	spinnerFrame       int
-	tableOffset        int
+	// unified manage overlay (groups + services in one list)
+	manageMode          bool
+	manageRows          []manageRow
+	manageCursor        int
+	manageOffset        int
+	manageGroups        map[string][]string
+	manageGroupNames    []string
+	manageServices      []string
+	manageSelGroups     map[string]bool
+	manageSelSvcs       map[string]bool
+	manageConfirmDelete string
+	manageConfirmKind   string // "group" | "service"
+	manageErr           string
+	manageInfo          string // transient success/info line (e.g. "Started N service(s)")
+	manageNewPrompt     bool   // "n" → choose group vs service
+	editStatus          string
+	editStatusSeq       int
+	logFilterSelected   bool
+	spinnerFrame        int
+	tableOffset         int
 }
 
 const uiTickInterval = 500 * time.Millisecond
@@ -136,42 +163,24 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			u.viewport.SetHeight(viewportHeight)
 		}
 
-		if u.addMode && u.addFormMode != "" {
+		if u.manageMode && u.addFormMode != "" {
 			inputWidth := u.formInputWidth()
 			u.addFormName.SetWidth(inputWidth)
 			u.addFormCmd.SetWidth(inputWidth)
 		}
-
-		if u.groupMode && u.groupFormMode != "" {
+		if u.manageMode && u.groupFormMode != "" {
 			u.groupFormName.SetWidth(u.formInputWidth())
 		}
 
 	case tea.MouseWheelMsg:
 		switch {
-		case u.addMode:
-			if u.addFormMode == "" {
+		case u.manageMode:
+			if u.addFormMode == "" && u.groupFormMode == "" {
 				switch msg.Button {
 				case tea.MouseWheelUp:
-					if u.addCursor > 0 {
-						u.addCursor--
-					}
+					u.moveManageCursor(-1)
 				case tea.MouseWheelDown:
-					if u.addCursor < len(u.addCandidates)-1 {
-						u.addCursor++
-					}
-				}
-			}
-		case u.groupMode:
-			if u.groupFormMode == "" {
-				switch msg.Button {
-				case tea.MouseWheelUp:
-					if u.groupCursor > 0 {
-						u.groupCursor--
-					}
-				case tea.MouseWheelDown:
-					if u.groupCursor < len(u.groupNames)-1 {
-						u.groupCursor++
-					}
+					u.moveManageCursor(1)
 				}
 			}
 		default:
@@ -187,11 +196,8 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if keyRaw != "space" {
 			key = stringutil.NormalizeToken(keyRaw)
 		}
-		if u.addMode {
-			return u.updateAddMode(msg)
-		}
-		if u.groupMode {
-			return u.updateGroupMode(msg)
+		if u.manageMode {
+			return u.updateManageMode(msg)
 		}
 
 		switch key {
@@ -239,10 +245,10 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "a":
-			u.enterAddMode()
+			u.enterManageMode(true)
 
 		case "g":
-			u.enterGroupMode()
+			u.enterManageMode(false)
 
 		case "c":
 			return u, u.launchEditor()
@@ -261,8 +267,8 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch {
 		case msg.ok:
 			status = fmt.Sprintf("✓ Config saved: %d service(s), %d group(s) — affects future runs", msg.services, msg.groups)
-			if u.addMode && u.addFormMode == "" {
-				u.refreshAddCandidates()
+			if u.manageMode && u.addFormMode == "" && u.groupFormMode == "" {
+				u.buildManageRows()
 			}
 		case msg.tmpPath != "":
 			status = fmt.Sprintf("✗ Invalid config: %v — edits kept at %s (use 'pf edit' to fix)", msg.err, msg.tmpPath)
@@ -392,18 +398,14 @@ func (u *UI) viewContent() string {
 		return "Initializing..."
 	}
 
-	if u.addMode {
+	if u.manageMode {
 		if u.addFormMode != "" {
 			return u.renderServiceForm()
 		}
-		return u.renderAddServiceOverlay()
-	}
-
-	if u.groupMode {
 		if u.groupFormMode != "" {
 			return u.renderGroupForm()
 		}
-		return u.renderGroupOverlay()
+		return u.renderManageOverlay()
 	}
 
 	u.ensureViewportSize()
@@ -440,30 +442,210 @@ func (u *UI) viewContent() string {
 	return lipgloss.JoinVertical(lipgloss.Left, sections...)
 }
 
-func (u *UI) enterAddMode() {
-	st := storage.NewStorage()
-	allServices, err := st.ListServiceNames()
-	if err != nil {
-		return
-	}
-
-	u.addMode = true
+func (u *UI) enterManageMode(focusServices bool) {
+	u.manageMode = true
 	u.addFormMode = ""
-	u.addFormErr = ""
-	u.addConfirmDelete = ""
-	u.addCandidates = allServices
-	u.addCursor = 0
-	u.addSelected = make(map[string]bool)
+	u.groupFormMode = ""
+	u.manageErr = ""
+	u.manageInfo = ""
+	u.manageNewPrompt = false
+	u.manageConfirmDelete = ""
+	u.manageConfirmKind = ""
+	u.manageSelGroups = make(map[string]bool)
+	u.manageSelSvcs = make(map[string]bool)
+	u.manageCursor = 0
+	u.manageOffset = 0
+	u.buildManageRows()
+	if focusServices {
+		u.focusFirstService()
+	} else {
+		u.focusFirstSelectable()
+	}
 }
 
-func (u *UI) exitAddMode() {
-	u.addMode = false
+func (u *UI) exitManageMode() {
+	u.manageMode = false
 	u.addFormMode = ""
-	u.addFormErr = ""
-	u.addConfirmDelete = ""
-	u.addCandidates = nil
-	u.addCursor = 0
-	u.addSelected = nil
+	u.groupFormMode = ""
+	u.manageErr = ""
+	u.manageInfo = ""
+	u.manageNewPrompt = false
+	u.manageConfirmDelete = ""
+	u.manageConfirmKind = ""
+	u.manageRows = nil
+	u.manageGroups = nil
+	u.manageGroupNames = nil
+	u.manageServices = nil
+	u.manageSelGroups = nil
+	u.manageSelSvcs = nil
+	u.manageCursor = 0
+	u.manageOffset = 0
+	u.addFormName.Blur()
+	u.addFormCmd.Blur()
+	u.groupFormName.Blur()
+}
+
+// buildManageRows refreshes the combined groups+services list from storage,
+// prunes stale selections, and re-clamps the cursor onto a selectable row.
+func (u *UI) buildManageRows() {
+	st := storage.NewStorage()
+	groups, err := st.ListGroups()
+	if err != nil {
+		groups = map[string][]string{}
+	}
+	groupNames := make([]string, 0, len(groups))
+	for name := range groups {
+		groupNames = append(groupNames, name)
+	}
+	sort.Strings(groupNames)
+
+	svcNames, err := st.ListServiceNames()
+	if err != nil {
+		svcNames = nil
+	}
+
+	u.manageGroups = groups
+	u.manageGroupNames = groupNames
+	u.manageServices = svcNames
+
+	if u.manageSelGroups != nil {
+		valid := make(map[string]bool, len(groupNames))
+		for _, n := range groupNames {
+			valid[n] = true
+		}
+		for n := range u.manageSelGroups {
+			if !valid[n] {
+				delete(u.manageSelGroups, n)
+			}
+		}
+	}
+	if u.manageSelSvcs != nil {
+		valid := make(map[string]bool, len(svcNames))
+		for _, n := range svcNames {
+			valid[n] = true
+		}
+		for n := range u.manageSelSvcs {
+			if !valid[n] {
+				delete(u.manageSelSvcs, n)
+			}
+		}
+	}
+
+	rows := make([]manageRow, 0, len(groupNames)+len(svcNames)+2)
+	rows = append(rows, manageRow{kind: rowHeaderGroups})
+	if len(groupNames) == 0 {
+		rows = append(rows, manageRow{kind: rowEmptyGroups})
+	} else {
+		for _, n := range groupNames {
+			rows = append(rows, manageRow{kind: rowGroup, name: n})
+		}
+	}
+	rows = append(rows, manageRow{kind: rowHeaderServices})
+	if len(svcNames) == 0 {
+		rows = append(rows, manageRow{kind: rowEmptyServices})
+	} else {
+		for _, n := range svcNames {
+			rows = append(rows, manageRow{kind: rowService, name: n})
+		}
+	}
+	u.manageRows = rows
+	u.clampManageCursor(1)
+}
+
+// clampManageCursor snaps the cursor onto the nearest selectable row, searching
+// forward first then backward. Used after refresh/delete shifts rows.
+func (u *UI) clampManageCursor(int) {
+	n := len(u.manageRows)
+	if n == 0 {
+		u.manageCursor = 0
+		return
+	}
+	if u.manageCursor < 0 {
+		u.manageCursor = 0
+	}
+	if u.manageCursor >= n {
+		u.manageCursor = n - 1
+	}
+	if u.manageRows[u.manageCursor].selectable() {
+		return
+	}
+	for i := u.manageCursor; i < n; i++ {
+		if u.manageRows[i].selectable() {
+			u.manageCursor = i
+			return
+		}
+	}
+	for i := u.manageCursor; i >= 0; i-- {
+		if u.manageRows[i].selectable() {
+			u.manageCursor = i
+			return
+		}
+	}
+}
+
+// moveManageCursor walks in the given direction to the next selectable row,
+// skipping headers and placeholders. Stays put if none exist that way.
+func (u *UI) moveManageCursor(step int) {
+	n := len(u.manageRows)
+	if n == 0 || step == 0 {
+		return
+	}
+	for i := u.manageCursor + step; i >= 0 && i < n; i += step {
+		if u.manageRows[i].selectable() {
+			u.manageCursor = i
+			return
+		}
+	}
+}
+
+func (u *UI) focusFirstSelectable() {
+	for i := range u.manageRows {
+		if u.manageRows[i].selectable() {
+			u.manageCursor = i
+			return
+		}
+	}
+}
+
+func (u *UI) focusFirstService() {
+	for i := range u.manageRows {
+		if u.manageRows[i].kind == rowService {
+			u.manageCursor = i
+			return
+		}
+	}
+	u.focusFirstSelectable()
+}
+
+func (u *UI) focusManage(kind manageRowKind, name string) {
+	for i := range u.manageRows {
+		if u.manageRows[i].kind == kind && u.manageRows[i].name == name {
+			u.manageCursor = i
+			return
+		}
+	}
+	u.clampManageCursor(1)
+}
+
+func (u *UI) currentManageRow() manageRow {
+	if u.manageCursor < 0 || u.manageCursor >= len(u.manageRows) {
+		return manageRow{}
+	}
+	return u.manageRows[u.manageCursor]
+}
+
+// cursorSectionIsGroups reports whether the cursor is within the GROUPS section
+// (drives context-aware 'n' = new group vs new service).
+func (u *UI) cursorSectionIsGroups() bool {
+	for i := u.manageCursor; i >= 0 && i < len(u.manageRows); i-- {
+		switch u.manageRows[i].kind {
+		case rowHeaderGroups:
+			return true
+		case rowHeaderServices:
+			return false
+		}
+	}
+	return true
 }
 
 func (u *UI) runningNameSet() map[string]bool {
@@ -474,9 +656,12 @@ func (u *UI) runningNameSet() map[string]bool {
 	return set
 }
 
-func (u *UI) updateAddMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (u *UI) updateManageMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if u.addFormMode != "" {
 		return u.updateAddForm(msg)
+	}
+	if u.groupFormMode != "" {
+		return u.updateGroupForm(msg)
 	}
 
 	keyRaw := msg.String()
@@ -485,67 +670,139 @@ func (u *UI) updateAddMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		key = stringutil.NormalizeToken(keyRaw)
 	}
 
-	if u.addConfirmDelete != "" {
+	if u.manageConfirmDelete != "" {
 		switch key {
 		case "y", "enter":
-			name := u.addConfirmDelete
-			u.addConfirmDelete = ""
-			if err := storage.NewStorage().DeleteService(name); err != nil {
-				u.addFormErr = fmt.Sprintf("delete failed: %v", err)
+			name := u.manageConfirmDelete
+			kind := u.manageConfirmKind
+			u.manageConfirmDelete = ""
+			u.manageConfirmKind = ""
+			st := storage.NewStorage()
+			var err error
+			if kind == "group" {
+				err = st.DeleteGroup(name)
+				delete(u.manageSelGroups, name)
+			} else {
+				err = st.DeleteService(name)
+				delete(u.manageSelSvcs, name)
+			}
+			if err != nil {
+				u.manageErr = fmt.Sprintf("delete failed: %v", err)
 				return u, nil
 			}
-			u.addFormErr = ""
-			u.refreshAddCandidates()
+			u.manageErr = ""
+			u.buildManageRows()
 		case "n", "esc":
-			u.addConfirmDelete = ""
+			u.manageConfirmDelete = ""
+			u.manageConfirmKind = ""
+		}
+		return u, nil
+	}
+
+	if u.manageNewPrompt {
+		switch key {
+		case "g":
+			u.manageNewPrompt = false
+			return u, u.openNewGroupForm()
+		case "s":
+			u.manageNewPrompt = false
+			return u, u.openNewServiceForm()
+		case "n", "esc":
+			u.manageNewPrompt = false
 		}
 		return u, nil
 	}
 
 	switch key {
 	case "esc":
-		u.exitAddMode()
+		u.exitManageMode()
 	case "up", "k":
-		if u.addCursor > 0 {
-			u.addCursor--
-		}
+		u.moveManageCursor(-1)
 	case "down", "j":
-		if u.addCursor < len(u.addCandidates)-1 {
-			u.addCursor++
-		}
-	case "d":
-		if u.addCursor >= 0 && u.addCursor < len(u.addCandidates) {
-			name := u.addCandidates[u.addCursor]
-			if u.runningNameSet()[name] {
-				u.addFormErr = fmt.Sprintf("stop '%s' before deleting", name)
-			} else {
-				u.addFormErr = ""
-				u.addConfirmDelete = name
-			}
-		}
+		u.moveManageCursor(1)
 	case "space":
-		if u.addCursor >= 0 && u.addCursor < len(u.addCandidates) {
-			serviceName := u.addCandidates[u.addCursor]
-			if !u.runningNameSet()[serviceName] {
-				u.addSelected[serviceName] = !u.addSelected[serviceName]
+		u.manageInfo = ""
+		row := u.currentManageRow()
+		switch row.kind {
+		case rowGroup:
+			u.manageSelGroups[row.name] = !u.manageSelGroups[row.name]
+		case rowService:
+			if !u.runningNameSet()[row.name] {
+				u.manageSelSvcs[row.name] = !u.manageSelSvcs[row.name]
 			}
 		}
 	case "n":
-		return u, u.openNewServiceForm()
+		u.manageErr = ""
+		u.manageInfo = ""
+		u.manageNewPrompt = true
 	case "e":
-		return u, u.openEditServiceForm()
+		row := u.currentManageRow()
+		switch row.kind {
+		case rowGroup:
+			return u, u.openEditGroupFormFor(row.name)
+		case rowService:
+			return u, u.openEditServiceFormFor(row.name)
+		}
+	case "d":
+		row := u.currentManageRow()
+		switch row.kind {
+		case rowGroup:
+			u.manageErr = ""
+			u.manageConfirmDelete = row.name
+			u.manageConfirmKind = "group"
+		case rowService:
+			if u.runningNameSet()[row.name] {
+				u.manageErr = fmt.Sprintf("stop '%s' before deleting", row.name)
+			} else {
+				u.manageErr = ""
+				u.manageConfirmDelete = row.name
+				u.manageConfirmKind = "service"
+			}
+		}
 	case "c":
 		return u, u.launchEditor()
 	case "enter":
-		running := u.runningNameSet()
-		for serviceName, selected := range u.addSelected {
-			if selected && !running[serviceName] {
-				_ = u.manager.StartStoredService(u.ctx, serviceName)
-			}
+		if u.runManageSelection() {
+			u.exitManageMode()
 		}
-		u.exitAddMode()
 	}
 	return u, nil
+}
+
+// runManageSelection starts every non-running service across the selected groups
+// and selected loose services (each at most once). Returns true when something was
+// selected (caller closes the overlay so the main list shows the run); false when
+// nothing was selected (overlay stays open with a hint).
+func (u *UI) runManageSelection() bool {
+	u.manageErr = ""
+	if len(u.manageSelGroups) == 0 && len(u.manageSelSvcs) == 0 {
+		u.manageInfo = "Select groups/services with Space first, then Enter to run"
+		return false
+	}
+
+	running := u.runningNameSet()
+	seen := make(map[string]bool)
+	start := func(name string) {
+		if name == "" || running[name] || seen[name] {
+			return
+		}
+		seen[name] = true
+		_ = u.manager.StartStoredService(u.ctx, name)
+	}
+	for _, g := range u.manageGroupNames {
+		if u.manageSelGroups[g] {
+			for _, svc := range u.manageGroups[g] {
+				start(svc)
+			}
+		}
+	}
+	for _, s := range u.manageServices {
+		if u.manageSelSvcs[s] {
+			start(s)
+		}
+	}
+	u.services = u.manager.ListServiceStates()
+	return true
 }
 
 func (u *UI) formInputWidth() int {
@@ -582,11 +839,7 @@ func (u *UI) openNewServiceForm() tea.Cmd {
 	return u.addFormName.Focus()
 }
 
-func (u *UI) openEditServiceForm() tea.Cmd {
-	if u.addCursor < 0 || u.addCursor >= len(u.addCandidates) {
-		return nil
-	}
-	name := u.addCandidates[u.addCursor]
+func (u *UI) openEditServiceFormFor(name string) tea.Cmd {
 	command, err := storage.NewStorage().GetService(name)
 	if err != nil {
 		return nil
@@ -704,154 +957,14 @@ func (u *UI) submitServiceForm() (tea.Model, tea.Cmd) {
 	}
 
 	u.closeAddForm()
-	u.refreshAddCandidates()
-	u.focusCandidate(name)
+	u.buildManageRows()
+	u.focusManage(rowService, name)
 
 	statusCmd := u.setStatus(status)
 	if restartCmd != nil {
 		return u, tea.Batch(restartCmd, statusCmd)
 	}
 	return u, statusCmd
-}
-
-func (u *UI) refreshAddCandidates() {
-	names, err := storage.NewStorage().ListServiceNames()
-	if err != nil {
-		return
-	}
-	u.addCandidates = names
-	if u.addSelected == nil {
-		u.addSelected = make(map[string]bool)
-	}
-	if u.addCursor >= len(u.addCandidates) {
-		u.addCursor = len(u.addCandidates) - 1
-	}
-	if u.addCursor < 0 {
-		u.addCursor = 0
-	}
-}
-
-func (u *UI) focusCandidate(name string) {
-	for i, c := range u.addCandidates {
-		if c == name {
-			u.addCursor = i
-			return
-		}
-	}
-}
-
-func (u *UI) enterGroupMode() {
-	u.groupMode = true
-	u.groupFormMode = ""
-	u.groupFormErr = ""
-	u.groupConfirmDelete = ""
-	u.groupCursor = 0
-	u.refreshGroupNames()
-}
-
-func (u *UI) exitGroupMode() {
-	u.groupMode = false
-	u.groupFormMode = ""
-	u.groupFormErr = ""
-	u.groupConfirmDelete = ""
-	u.groups = nil
-	u.groupNames = nil
-	u.groupCursor = 0
-	u.groupFormServices = nil
-	u.groupFormSelected = nil
-}
-
-func (u *UI) refreshGroupNames() {
-	groups, err := storage.NewStorage().ListGroups()
-	if err != nil {
-		return
-	}
-	names := make([]string, 0, len(groups))
-	for name := range groups {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	u.groups = groups
-	u.groupNames = names
-	if u.groupCursor >= len(u.groupNames) {
-		u.groupCursor = len(u.groupNames) - 1
-	}
-	if u.groupCursor < 0 {
-		u.groupCursor = 0
-	}
-}
-
-func (u *UI) focusGroup(name string) {
-	for i, g := range u.groupNames {
-		if g == name {
-			u.groupCursor = i
-			return
-		}
-	}
-}
-
-func (u *UI) updateGroupMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if u.groupFormMode != "" {
-		return u.updateGroupForm(msg)
-	}
-
-	keyRaw := msg.String()
-	key := keyRaw
-	if keyRaw != "space" {
-		key = stringutil.NormalizeToken(keyRaw)
-	}
-
-	if u.groupConfirmDelete != "" {
-		switch key {
-		case "y", "enter":
-			name := u.groupConfirmDelete
-			u.groupConfirmDelete = ""
-			if err := storage.NewStorage().DeleteGroup(name); err != nil {
-				u.groupFormErr = fmt.Sprintf("delete failed: %v", err)
-				return u, nil
-			}
-			u.groupFormErr = ""
-			u.refreshGroupNames()
-		case "n", "esc":
-			u.groupConfirmDelete = ""
-		}
-		return u, nil
-	}
-
-	switch key {
-	case "esc":
-		u.exitGroupMode()
-	case "up", "k":
-		if u.groupCursor > 0 {
-			u.groupCursor--
-		}
-	case "down", "j":
-		if u.groupCursor < len(u.groupNames)-1 {
-			u.groupCursor++
-		}
-	case "n":
-		return u, u.openNewGroupForm()
-	case "e":
-		return u, u.openEditGroupForm()
-	case "d":
-		if u.groupCursor >= 0 && u.groupCursor < len(u.groupNames) {
-			u.groupFormErr = ""
-			u.groupConfirmDelete = u.groupNames[u.groupCursor]
-		}
-	case "enter":
-		if u.groupCursor >= 0 && u.groupCursor < len(u.groupNames) {
-			name := u.groupNames[u.groupCursor]
-			members := u.groups[name]
-			running := u.runningNameSet()
-			for _, svc := range members {
-				if !running[svc] {
-					_ = u.manager.StartStoredService(u.ctx, svc)
-				}
-			}
-			u.exitGroupMode()
-		}
-	}
-	return u, nil
 }
 
 func (u *UI) openNewGroupForm() tea.Cmd {
@@ -870,11 +983,7 @@ func (u *UI) openNewGroupForm() tea.Cmd {
 	return u.groupFormName.Focus()
 }
 
-func (u *UI) openEditGroupForm() tea.Cmd {
-	if u.groupCursor < 0 || u.groupCursor >= len(u.groupNames) {
-		return nil
-	}
-	name := u.groupNames[u.groupCursor]
+func (u *UI) openEditGroupFormFor(name string) tea.Cmd {
 	names, err := storage.NewStorage().ListServiceNames()
 	if err != nil {
 		return nil
@@ -885,7 +994,7 @@ func (u *UI) openEditGroupForm() tea.Cmd {
 	u.groupFormName = newServiceTextInput("group name", name, u.formInputWidth())
 	u.groupFormServices = names
 	u.groupFormSelected = make(map[string]bool)
-	for _, svc := range u.groups[name] {
+	for _, svc := range u.manageGroups[name] {
 		u.groupFormSelected[svc] = true
 	}
 	u.groupFormFocus = 0
@@ -969,7 +1078,7 @@ func (u *UI) submitGroupForm() (tea.Model, tea.Cmd) {
 
 	switch u.groupFormMode {
 	case "new":
-		if _, exists := u.groups[name]; exists {
+		if _, exists := u.manageGroups[name]; exists {
 			u.groupFormErr = fmt.Sprintf("a group named '%s' already exists", name)
 			return u, nil
 		}
@@ -996,8 +1105,8 @@ func (u *UI) submitGroupForm() (tea.Model, tea.Cmd) {
 	}
 
 	u.closeGroupForm()
-	u.refreshGroupNames()
-	u.focusGroup(name)
+	u.buildManageRows()
+	u.focusManage(rowGroup, name)
 	return u, u.setStatus(status)
 }
 
@@ -1539,7 +1648,107 @@ func padRightRunes(text string, width int) string {
 	return text + strings.Repeat(" ", width-len(runes))
 }
 
-func (u *UI) renderAddServiceOverlay() string {
+func (u *UI) manageVisibleRows() int {
+	if u.height <= 0 {
+		return 20
+	}
+	v := u.height - 8
+	if v < 5 {
+		v = 5
+	}
+	if v > 24 {
+		v = 24
+	}
+	return v
+}
+
+func (u *UI) ensureManageVisible() {
+	visible := u.manageVisibleRows()
+	if len(u.manageRows) <= visible {
+		u.manageOffset = 0
+		return
+	}
+	if u.manageCursor < u.manageOffset {
+		u.manageOffset = u.manageCursor
+	}
+	if u.manageCursor >= u.manageOffset+visible {
+		u.manageOffset = u.manageCursor - visible + 1
+	}
+	if maxOff := len(u.manageRows) - visible; u.manageOffset > maxOff {
+		u.manageOffset = maxOff
+	}
+	if u.manageOffset < 0 {
+		u.manageOffset = 0
+	}
+}
+
+func (u *UI) renderManageGroupRow(name string, cursorOn bool, maxNameLen int, running map[string]bool) string {
+	highlight := "  "
+	if cursorOn {
+		highlight = lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("► ")
+	}
+	checkbox := "[ ]"
+	if u.manageSelGroups[name] {
+		checkbox = "[✓]"
+	}
+	box := lipgloss.NewStyle().Foreground(colorMuted).Render(checkbox)
+
+	displayName := name
+	if len(displayName) > maxNameLen {
+		displayName = displayName[:maxNameLen-3] + "..."
+	}
+	nameColor := colorText
+	if cursorOn {
+		nameColor = colorAccent
+	}
+	styledName := lipgloss.NewStyle().Foreground(nameColor).Bold(true).Render(fmt.Sprintf("%-*s", maxNameLen, displayName))
+
+	members := u.manageGroups[name]
+	run := 0
+	for _, svc := range members {
+		if running[svc] {
+			run++
+		}
+	}
+	info := lipgloss.NewStyle().Foreground(colorMuted).
+		Render(fmt.Sprintf("%s  %d/%d running", summarizeMembers(members), run, len(members)))
+
+	return highlight + box + " " + styledName + "  " + info
+}
+
+func (u *UI) renderManageServiceRow(name string, cursorOn bool, maxNameLen int, running map[string]bool) string {
+	highlight := "  "
+	if cursorOn {
+		highlight = lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("► ")
+	}
+
+	displayName := name
+	if len(displayName) > maxNameLen {
+		displayName = displayName[:maxNameLen-3] + "..."
+	}
+	nameColor := colorText
+	if cursorOn {
+		nameColor = colorAccent
+	}
+	styledName := lipgloss.NewStyle().Foreground(nameColor).Bold(true).Render(fmt.Sprintf("%-*s", maxNameLen, displayName))
+
+	var box, indicator string
+	if running[name] {
+		box = lipgloss.NewStyle().Foreground(colorMuted).Render("   ")
+		indicator = lipgloss.NewStyle().Foreground(colorAccentAlt).Render("● running")
+	} else {
+		checkbox := "[ ]"
+		if u.manageSelSvcs[name] {
+			checkbox = "[✓]"
+		}
+		box = lipgloss.NewStyle().Foreground(colorMuted).Render(checkbox)
+		indicator = lipgloss.NewStyle().Foreground(colorMuted).Render("○ stopped")
+	}
+
+	return highlight + box + " " + styledName + "  " + indicator
+}
+
+func (u *UI) renderManageOverlay() string {
 	width := u.width
 	if width <= 0 {
 		width = 120
@@ -1551,112 +1760,100 @@ func (u *UI) renderAddServiceOverlay() string {
 	running := u.runningNameSet()
 
 	maxNameLen := 7
-	for _, serviceName := range u.addCandidates {
-		nameLen := len(serviceName)
-		if nameLen > maxNameLen {
-			maxNameLen = nameLen
+	for _, n := range u.manageGroupNames {
+		if len(n) > maxNameLen {
+			maxNameLen = len(n)
+		}
+	}
+	for _, n := range u.manageServices {
+		if len(n) > maxNameLen {
+			maxNameLen = len(n)
 		}
 	}
 	if maxNameLen > 30 {
 		maxNameLen = 30
 	}
 
-	rows := make([]string, 0, len(u.addCandidates)+3)
-	headerName := fmt.Sprintf("%-*s", maxNameLen, "SERVICE")
-	header := lipgloss.NewStyle().
-		Foreground(colorHeading).
-		Bold(true).
-		Render(headerName + "  SELECT")
-	rows = append(rows, header)
-
-	sepWidth := width - 6
-	if sepWidth < 50 {
-		sepWidth = 50
+	u.ensureManageVisible()
+	visible := u.manageVisibleRows()
+	start := u.manageOffset
+	end := start + visible
+	if end > len(u.manageRows) {
+		end = len(u.manageRows)
 	}
-	if sepWidth > 200 {
-		sepWidth = 200
-	}
-	rows = append(rows, lipgloss.NewStyle().Foreground(colorBorder).Render(strings.Repeat("─", sepWidth)))
-
-	if len(u.addCandidates) == 0 {
-		rows = append(rows, lipgloss.NewStyle().
-			Foreground(colorMuted).
-			Italic(true).
-			Render("No services yet — press 'n' to create one"))
+	if start > end {
+		start = end
 	}
 
-	for i, serviceName := range u.addCandidates {
-		selected := i == u.addCursor
-		highlight := "  "
-		if selected {
-			highlight = lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("► ")
+	rows := make([]string, 0, end-start+2)
+	rows = append(rows, lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("ADD / EDIT")+
+		lipgloss.NewStyle().Foreground(colorMuted).Render("  — groups & services"))
+	for i := start; i < end; i++ {
+		row := u.manageRows[i]
+		cursorOn := i == u.manageCursor
+		switch row.kind {
+		case rowHeaderGroups:
+			rows = append(rows, lipgloss.NewStyle().Foreground(colorHeading).Bold(true).Render("GROUPS"))
+		case rowHeaderServices:
+			rows = append(rows, lipgloss.NewStyle().Foreground(colorHeading).Bold(true).Render("SERVICES"))
+		case rowEmptyGroups:
+			rows = append(rows, lipgloss.NewStyle().Foreground(colorMuted).Italic(true).Render("  (no groups — n to create)"))
+		case rowEmptyServices:
+			rows = append(rows, lipgloss.NewStyle().Foreground(colorMuted).Italic(true).Render("  (no services — n to create)"))
+		case rowGroup:
+			rows = append(rows, u.renderManageGroupRow(row.name, cursorOn, maxNameLen, running))
+		case rowService:
+			rows = append(rows, u.renderManageServiceRow(row.name, cursorOn, maxNameLen, running))
 		}
+	}
 
-		displayName := serviceName
-		if len(displayName) > maxNameLen {
-			displayName = displayName[:maxNameLen-3] + "..."
-		}
-		name := fmt.Sprintf("%-*s", maxNameLen, displayName)
-		nameColor := colorText
-		if selected {
-			nameColor = colorAccent
-		}
-		styledName := lipgloss.NewStyle().
-			Foreground(nameColor).
-			Bold(true).
-			Render(name)
-
-		var marker string
-		if running[serviceName] {
-			marker = lipgloss.NewStyle().
-				Foreground(colorAccentAlt).
-				Render(fmt.Sprintf("%-7s", "running"))
-		} else {
-			checkbox := "[ ]"
-			if u.addSelected != nil && u.addSelected[serviceName] {
-				checkbox = "[✓]"
-			}
-			marker = lipgloss.NewStyle().
-				Foreground(colorMuted).
-				Render(fmt.Sprintf("%-7s", checkbox))
-		}
-
-		rows = append(rows, highlight+styledName+"  "+marker)
+	if len(u.manageRows) > visible {
+		rows = append(rows, lipgloss.NewStyle().Foreground(colorMuted).
+			Render(fmt.Sprintf("(%d–%d of %d)", start+1, end, len(u.manageRows))))
 	}
 
 	table := lipgloss.JoinVertical(lipgloss.Left, rows...)
-	style := lipgloss.NewStyle().
+	overlayBox := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colorBorder).
 		Padding(0, 1).
-		Width(width - 2)
-
-	overlayBox := style.Render(table)
+		Width(width - 2).
+		Render(table)
 
 	sections := []string{overlayBox}
 
-	if u.addConfirmDelete != "" {
-		confirmText := lipgloss.NewStyle().
-			Foreground(colorWarn).
-			Bold(true).
-			Render(fmt.Sprintf("Delete service '%s'? This cannot be undone.", u.addConfirmDelete))
-		confirmKeys := renderActionChips([][2]string{
-			{"y", "confirm"},
-			{"n", "cancel"},
-		})
+	switch {
+	case u.manageNewPrompt:
+		promptText := lipgloss.NewStyle().Foreground(colorAccentAlt).Bold(true).Render("Create new —")
+		promptKeys := renderActionChips([][2]string{{"g", "group"}, {"s", "service"}, {"esc", "cancel"}})
+		promptBody := lipgloss.JoinVertical(lipgloss.Left, promptText, "", promptKeys)
+		sections = append(sections, lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(colorAccentAlt).
+			Padding(0, 1).
+			Width(width-2).
+			Render(promptBody))
+	case u.manageConfirmDelete != "":
+		msg := fmt.Sprintf("Delete service '%s'? This cannot be undone.", u.manageConfirmDelete)
+		if u.manageConfirmKind == "group" {
+			msg = fmt.Sprintf("Delete group '%s'? Member services are kept.", u.manageConfirmDelete)
+		}
+		confirmText := lipgloss.NewStyle().Foreground(colorWarn).Bold(true).Render(msg)
+		confirmKeys := renderActionChips([][2]string{{"y", "confirm"}, {"n", "cancel"}})
 		confirmBody := lipgloss.JoinVertical(lipgloss.Left, confirmText, "", confirmKeys)
-		confirmBox := lipgloss.NewStyle().
+		sections = append(sections, lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(colorError).
 			Padding(0, 1).
-			Width(width - 2).
-			Render(confirmBody)
-		sections = append(sections, confirmBox)
-	} else if u.addFormErr != "" {
-		sections = append(sections, lipgloss.NewStyle().Foreground(colorError).Render("✗ "+u.addFormErr))
+			Width(width-2).
+			Render(confirmBody))
+	case u.manageErr != "":
+		sections = append(sections, lipgloss.NewStyle().Foreground(colorError).Render("✗ "+u.manageErr))
+	case u.manageInfo != "":
+		sections = append(sections, lipgloss.NewStyle().Foreground(colorAccentAlt).Bold(true).Render(u.manageInfo))
 	}
 
-	instructionStyled := renderActionChips([][2]string{
+	sections = append(sections, renderActionChips([][2]string{
 		{"↑↓", "navigate"},
 		{"Space", "select"},
 		{"Enter", "run"},
@@ -1664,9 +1861,8 @@ func (u *UI) renderAddServiceOverlay() string {
 		{"e", "edit"},
 		{"d", "delete"},
 		{"c", "config"},
-		{"Esc", "cancel"},
-	})
-	sections = append(sections, instructionStyled)
+		{"Esc", "close"},
+	}))
 
 	return lipgloss.JoinVertical(lipgloss.Left, sections...)
 }
@@ -1741,120 +1937,6 @@ func summarizeMembers(members []string) string {
 		return fmt.Sprintf("%d services", len(members))
 	}
 	return joined
-}
-
-func (u *UI) renderGroupOverlay() string {
-	width := u.width
-	if width <= 0 {
-		width = 120
-	}
-	if width < 60 {
-		width = 60
-	}
-
-	maxNameLen := 7
-	for _, name := range u.groupNames {
-		if len(name) > maxNameLen {
-			maxNameLen = len(name)
-		}
-	}
-	if maxNameLen > 30 {
-		maxNameLen = 30
-	}
-
-	rows := make([]string, 0, len(u.groupNames)+3)
-	header := lipgloss.NewStyle().
-		Foreground(colorHeading).
-		Bold(true).
-		Render(fmt.Sprintf("%-*s  %s", maxNameLen, "GROUP", "SERVICES"))
-	rows = append(rows, header)
-
-	sepWidth := width - 6
-	if sepWidth < 50 {
-		sepWidth = 50
-	}
-	if sepWidth > 200 {
-		sepWidth = 200
-	}
-	rows = append(rows, lipgloss.NewStyle().Foreground(colorBorder).Render(strings.Repeat("─", sepWidth)))
-
-	if len(u.groupNames) == 0 {
-		rows = append(rows, lipgloss.NewStyle().
-			Foreground(colorMuted).
-			Italic(true).
-			Render("No groups yet — press 'n' to create one"))
-	}
-
-	for i, name := range u.groupNames {
-		selected := i == u.groupCursor
-		highlight := "  "
-		if selected {
-			highlight = lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("► ")
-		}
-
-		displayName := name
-		if len(displayName) > maxNameLen {
-			displayName = displayName[:maxNameLen-3] + "..."
-		}
-		nameColor := colorText
-		if selected {
-			nameColor = colorAccent
-		}
-		styledName := lipgloss.NewStyle().
-			Foreground(nameColor).
-			Bold(true).
-			Render(fmt.Sprintf("%-*s", maxNameLen, displayName))
-
-		styledMembers := lipgloss.NewStyle().
-			Foreground(colorMuted).
-			Render(summarizeMembers(u.groups[name]))
-
-		rows = append(rows, highlight+styledName+"  "+styledMembers)
-	}
-
-	table := lipgloss.JoinVertical(lipgloss.Left, rows...)
-	style := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(colorBorder).
-		Padding(0, 1).
-		Width(width - 2)
-
-	overlayBox := style.Render(table)
-
-	sections := []string{overlayBox}
-
-	if u.groupConfirmDelete != "" {
-		confirmText := lipgloss.NewStyle().
-			Foreground(colorWarn).
-			Bold(true).
-			Render(fmt.Sprintf("Delete group '%s'? Member services are kept.", u.groupConfirmDelete))
-		confirmKeys := renderActionChips([][2]string{
-			{"y", "confirm"},
-			{"n", "cancel"},
-		})
-		confirmBody := lipgloss.JoinVertical(lipgloss.Left, confirmText, "", confirmKeys)
-		confirmBox := lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(colorError).
-			Padding(0, 1).
-			Width(width - 2).
-			Render(confirmBody)
-		sections = append(sections, confirmBox)
-	} else if u.groupFormErr != "" {
-		sections = append(sections, lipgloss.NewStyle().Foreground(colorError).Render("✗ "+u.groupFormErr))
-	}
-
-	instructionStyled := renderActionChips([][2]string{
-		{"↑↓", "navigate"},
-		{"Enter", "run"},
-		{"n", "new"},
-		{"e", "edit"},
-		{"d", "delete"},
-		{"Esc", "cancel"},
-	})
-	sections = append(sections, instructionStyled)
-
-	return lipgloss.JoinVertical(lipgloss.Left, sections...)
 }
 
 func (u *UI) renderGroupForm() string {
@@ -1994,8 +2076,7 @@ func helpLines(width int, logScope string) []string {
 		chips = []chip{
 			{"↑↓", "move"},
 			{"l", "logs=" + logScope},
-			{"a", "add"},
-			{"g", "group"},
+			{"a", "add/edit"},
 			{"c", "config"},
 			{"r", "restart"},
 			{"s", "stop"},
@@ -2006,7 +2087,6 @@ func helpLines(width int, logScope string) []string {
 			{"↑↓/j/k", "move"},
 			{"l", "logs=" + logScope},
 			{"a", "add/edit"},
-			{"g", "group"},
 			{"c", "config"},
 			{"r", "restart"},
 			{"^r", "restart all"},
