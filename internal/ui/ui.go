@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbles/v2/viewport"
@@ -123,6 +124,7 @@ type UI struct {
 	manageConfirmKind   string // "group" | "service"
 	manageErr           string
 	manageInfo          string // transient success/info line (e.g. "Started N service(s)")
+	manageSearch        string // live filter query for the groups+services list
 	manageNewPrompt     bool   // "n" → choose group vs service
 	editStatus          string
 	editStatusSeq       int
@@ -448,6 +450,7 @@ func (u *UI) enterManageMode(focusServices bool) {
 	u.groupFormMode = ""
 	u.manageErr = ""
 	u.manageInfo = ""
+	u.manageSearch = ""
 	u.manageNewPrompt = false
 	u.manageConfirmDelete = ""
 	u.manageConfirmKind = ""
@@ -469,6 +472,7 @@ func (u *UI) exitManageMode() {
 	u.groupFormMode = ""
 	u.manageErr = ""
 	u.manageInfo = ""
+	u.manageSearch = ""
 	u.manageNewPrompt = false
 	u.manageConfirmDelete = ""
 	u.manageConfirmKind = ""
@@ -531,24 +535,45 @@ func (u *UI) buildManageRows() {
 		}
 	}
 
-	rows := make([]manageRow, 0, len(groupNames)+len(svcNames)+2)
+	u.rebuildManageRows()
+}
+
+// rebuildManageRows reconstructs the visible row list from the already-loaded
+// group and service names, applying the live search filter. Section headers are
+// always shown; a section with no matches shows its empty placeholder. Call this
+// (instead of buildManageRows) when only the filter changed — it avoids a disk
+// reload.
+func (u *UI) rebuildManageRows() {
+	q := strings.ToLower(strings.TrimSpace(u.manageSearch))
+	match := func(name string) bool {
+		return q == "" || strings.Contains(strings.ToLower(name), q)
+	}
+
+	rows := make([]manageRow, 0, len(u.manageGroupNames)+len(u.manageServices)+2)
 	rows = append(rows, manageRow{kind: rowHeaderGroups})
-	if len(groupNames) == 0 {
-		rows = append(rows, manageRow{kind: rowEmptyGroups})
-	} else {
-		for _, n := range groupNames {
+	groupMatches := 0
+	for _, n := range u.manageGroupNames {
+		if match(n) {
 			rows = append(rows, manageRow{kind: rowGroup, name: n})
+			groupMatches++
 		}
+	}
+	if groupMatches == 0 {
+		rows = append(rows, manageRow{kind: rowEmptyGroups})
 	}
 	rows = append(rows, manageRow{kind: rowHeaderServices})
-	if len(svcNames) == 0 {
-		rows = append(rows, manageRow{kind: rowEmptyServices})
-	} else {
-		for _, n := range svcNames {
+	svcMatches := 0
+	for _, n := range u.manageServices {
+		if match(n) {
 			rows = append(rows, manageRow{kind: rowService, name: n})
+			svcMatches++
 		}
 	}
+	if svcMatches == 0 {
+		rows = append(rows, manageRow{kind: rowEmptyServices})
+	}
 	u.manageRows = rows
+	u.manageOffset = 0
 	u.clampManageCursor(1)
 }
 
@@ -715,10 +740,17 @@ func (u *UI) updateManageMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch key {
 	case "esc":
-		u.exitManageMode()
-	case "up", "k":
+		// First Esc clears an active search; a second one closes the overlay.
+		if u.manageSearch != "" {
+			u.manageSearch = ""
+			u.manageInfo = ""
+			u.rebuildManageRows()
+		} else {
+			u.exitManageMode()
+		}
+	case "up":
 		u.moveManageCursor(-1)
-	case "down", "j":
+	case "down":
 		u.moveManageCursor(1)
 	case "space":
 		u.manageInfo = ""
@@ -731,11 +763,11 @@ func (u *UI) updateManageMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				u.manageSelSvcs[row.name] = !u.manageSelSvcs[row.name]
 			}
 		}
-	case "n":
+	case "ctrl+n":
 		u.manageErr = ""
 		u.manageInfo = ""
 		u.manageNewPrompt = true
-	case "e":
+	case "ctrl+e":
 		row := u.currentManageRow()
 		switch row.kind {
 		case rowGroup:
@@ -743,7 +775,7 @@ func (u *UI) updateManageMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case rowService:
 			return u, u.openEditServiceFormFor(row.name)
 		}
-	case "d":
+	case "ctrl+d":
 		row := u.currentManageRow()
 		switch row.kind {
 		case rowGroup:
@@ -759,11 +791,26 @@ func (u *UI) updateManageMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				u.manageConfirmKind = "service"
 			}
 		}
-	case "c":
+	case "ctrl+o":
 		return u, u.launchEditor()
 	case "enter":
 		if u.runManageSelection() {
 			u.exitManageMode()
+		}
+	case "backspace":
+		if u.manageSearch != "" {
+			r := []rune(u.manageSearch)
+			u.manageSearch = string(r[:len(r)-1])
+			u.manageInfo = ""
+			u.rebuildManageRows()
+		}
+	default:
+		// Live search: any single printable character typed extends the query and
+		// re-filters immediately — no key needed to "enter" search first.
+		if rs := []rune(keyRaw); len(rs) == 1 && unicode.IsPrint(rs[0]) {
+			u.manageSearch += keyRaw
+			u.manageInfo = ""
+			u.rebuildManageRows()
 		}
 	}
 	return u, nil
@@ -957,6 +1004,7 @@ func (u *UI) submitServiceForm() (tea.Model, tea.Cmd) {
 	}
 
 	u.closeAddForm()
+	u.manageSearch = "" // ensure the saved service is visible regardless of any active filter
 	u.buildManageRows()
 	u.focusManage(rowService, name)
 
@@ -1105,6 +1153,7 @@ func (u *UI) submitGroupForm() (tea.Model, tea.Cmd) {
 	}
 
 	u.closeGroupForm()
+	u.manageSearch = "" // ensure the saved group is visible regardless of any active filter
 	u.buildManageRows()
 	u.focusManage(rowGroup, name)
 	return u, u.setStatus(status)
@@ -1650,14 +1699,14 @@ func padRightRunes(text string, width int) string {
 
 func (u *UI) manageVisibleRows() int {
 	if u.height <= 0 {
-		return 20
+		return 30
 	}
-	v := u.height - 8
+	v := u.height - 9 // chrome: title + search line + box border + action chips
 	if v < 5 {
 		v = 5
 	}
-	if v > 24 {
-		v = 24
+	if v > 30 {
+		v = 30
 	}
 	return v
 }
@@ -1785,9 +1834,10 @@ func (u *UI) renderManageOverlay() string {
 		start = end
 	}
 
-	rows := make([]string, 0, end-start+2)
+	rows := make([]string, 0, end-start+3)
 	rows = append(rows, lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("ADD / EDIT")+
 		lipgloss.NewStyle().Foreground(colorMuted).Render("  — groups & services"))
+	rows = append(rows, u.renderManageSearchLine())
 	for i := start; i < end; i++ {
 		row := u.manageRows[i]
 		cursorOn := i == u.manageCursor
@@ -1797,9 +1847,17 @@ func (u *UI) renderManageOverlay() string {
 		case rowHeaderServices:
 			rows = append(rows, lipgloss.NewStyle().Foreground(colorHeading).Bold(true).Render("SERVICES"))
 		case rowEmptyGroups:
-			rows = append(rows, lipgloss.NewStyle().Foreground(colorMuted).Italic(true).Render("  (no groups — n to create)"))
+			text := "  (no groups — ^n to create)"
+			if u.manageSearch != "" {
+				text = "  (no matching groups)"
+			}
+			rows = append(rows, lipgloss.NewStyle().Foreground(colorMuted).Italic(true).Render(text))
 		case rowEmptyServices:
-			rows = append(rows, lipgloss.NewStyle().Foreground(colorMuted).Italic(true).Render("  (no services — n to create)"))
+			text := "  (no services — ^n to create)"
+			if u.manageSearch != "" {
+				text = "  (no matching services)"
+			}
+			rows = append(rows, lipgloss.NewStyle().Foreground(colorMuted).Italic(true).Render(text))
 		case rowGroup:
 			rows = append(rows, u.renderManageGroupRow(row.name, cursorOn, maxNameLen, running))
 		case rowService:
@@ -1854,17 +1912,31 @@ func (u *UI) renderManageOverlay() string {
 	}
 
 	sections = append(sections, renderActionChips([][2]string{
+		{"type", "search"},
 		{"↑↓", "navigate"},
 		{"Space", "select"},
 		{"Enter", "run"},
-		{"n", "new"},
-		{"e", "edit"},
-		{"d", "delete"},
-		{"c", "config"},
-		{"Esc", "close"},
+		{"^n", "new"},
+		{"^e", "edit"},
+		{"^d", "delete"},
+		{"^o", "config"},
+		{"Esc", "clear/close"},
 	}))
 
 	return lipgloss.JoinVertical(lipgloss.Left, sections...)
+}
+
+// renderManageSearchLine renders the always-focused search input shown at the top
+// of the manage overlay. Typing anywhere in the overlay feeds this query.
+func (u *UI) renderManageSearchLine() string {
+	label := lipgloss.NewStyle().Foreground(colorMuted).Render("Search: ")
+	cursor := lipgloss.NewStyle().Foreground(colorAccent).Render("▏")
+	if u.manageSearch == "" {
+		placeholder := lipgloss.NewStyle().Foreground(colorMuted).Italic(true).Render("type to filter…")
+		return label + cursor + placeholder
+	}
+	query := lipgloss.NewStyle().Foreground(colorAccentAlt).Bold(true).Render(u.manageSearch)
+	return label + query + cursor
 }
 
 func (u *UI) renderServiceForm() string {

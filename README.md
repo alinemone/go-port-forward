@@ -21,17 +21,33 @@ Modern CLI tool for managing multiple port-forward connections with real-time mo
 #### 🪟 Windows
 
 1. Download `pf-windows-amd64.exe` from [Releases](https://github.com/alinemone/go-port-forward/releases)
-2. Rename to `pf.exe`:
-   - **Right-click** the file → **Rename** → Change name to `pf.exe`
-   - Or in **Command Prompt/PowerShell**:
-     ```cmd
-     ren pf-windows-amd64.exe pf.exe
-     ```
-3. Move `pf.exe` to a folder in your PATH
-4. Run from anywhere:
-   ```cmd
-   pf.exe
+2. Open **PowerShell** in the folder where you downloaded it and run this one command. It
+   creates `~/.pf` if missing, renames the binary to `pf.exe`, moves it there, and adds
+   `~/.pf` to your user PATH:
+   ```powershell
+   $dest = "$HOME\.pf"
+   New-Item -ItemType Directory -Force -Path $dest | Out-Null
+   Move-Item -Force .\pf-windows-amd64.exe "$dest\pf.exe"
+   $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+   if ($userPath -notlike "*$dest*") {
+       $newPath = if ([string]::IsNullOrEmpty($userPath)) { $dest } else { "$userPath;$dest" }
+       [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
+   }
+   Write-Host "Installed to $dest\pf.exe - open a NEW terminal, then run: pf"
    ```
+3. **Close and reopen** your terminal (PATH changes only apply to new sessions), then run
+   from anywhere:
+   ```cmd
+   pf
+   ```
+
+<details>
+<summary>Prefer to do it manually?</summary>
+
+1. Rename `pf-windows-amd64.exe` to `pf.exe` (right-click → **Rename**, or `ren pf-windows-amd64.exe pf.exe`)
+2. Move `pf.exe` into a folder that is already in your PATH
+3. Run `pf` from anywhere
+</details>
 
 #### 🐧 Linux (Intel/AMD)
 
@@ -289,6 +305,9 @@ When running services:
 
 > On first run, an existing `services.json` next to the executable (legacy
 > location) is automatically migrated to `~/.pf/services.json`.
+>
+> On Windows, the recommended installer also places the binary itself at
+> `~/.pf/pf.exe` (i.e. `C:\Users\<you>\.pf\pf.exe`).
 
 ## 🏗️ Architecture
 
