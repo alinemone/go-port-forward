@@ -306,6 +306,11 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		u.ensureCursorInRange()
 		u.refreshViewportContent()
 		return u, tickCmd(uiTickInterval)
+
+	default:
+		if u.manageMode {
+			return u.updateManageInput(msg)
+		}
 	}
 
 	return u, cmd
@@ -681,12 +686,19 @@ func (u *UI) runningNameSet() map[string]bool {
 	return set
 }
 
-func (u *UI) updateManageMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (u *UI) updateManageInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if u.addFormMode != "" {
 		return u.updateAddForm(msg)
 	}
 	if u.groupFormMode != "" {
 		return u.updateGroupForm(msg)
+	}
+	return u, nil
+}
+
+func (u *UI) updateManageMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if u.addFormMode != "" || u.groupFormMode != "" {
+		return u.updateManageInput(msg)
 	}
 
 	keyRaw := msg.String()
@@ -791,7 +803,7 @@ func (u *UI) updateManageMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				u.manageConfirmKind = "service"
 			}
 		}
-	case "ctrl+o":
+	case "ctrl+c":
 		return u, u.launchEditor()
 	case "enter":
 		if u.runManageSelection() {
@@ -920,8 +932,17 @@ func (u *UI) toggleAddFormFocus() tea.Cmd {
 	return u.addFormName.Focus()
 }
 
-func (u *UI) updateAddForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	keyRaw := msg.String()
+func (u *UI) updateAddForm(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if paste, ok := msg.(tea.PasteMsg); ok {
+		return u.updateAddFormInput(paste)
+	}
+
+	keyMsg, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return u.updateAddFormInput(msg)
+	}
+
+	keyRaw := keyMsg.String()
 	key := keyRaw
 	if keyRaw != "space" {
 		key = stringutil.NormalizeToken(keyRaw)
@@ -937,6 +958,10 @@ func (u *UI) updateAddForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return u.submitServiceForm()
 	}
 
+	return u.updateAddFormInput(msg)
+}
+
+func (u *UI) updateAddFormInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	if u.addFormFocus == 0 {
 		u.addFormName, cmd = u.addFormName.Update(msg)
@@ -1066,8 +1091,17 @@ func (u *UI) toggleGroupFormFocus() tea.Cmd {
 	return u.groupFormName.Focus()
 }
 
-func (u *UI) updateGroupForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	keyRaw := msg.String()
+func (u *UI) updateGroupForm(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if paste, ok := msg.(tea.PasteMsg); ok {
+		return u.updateGroupNameInput(paste)
+	}
+
+	keyMsg, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return u.updateGroupNameInput(msg)
+	}
+
+	keyRaw := keyMsg.String()
 	key := keyRaw
 	if keyRaw != "space" {
 		key = stringutil.NormalizeToken(keyRaw)
@@ -1102,6 +1136,10 @@ func (u *UI) updateGroupForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return u, nil
 	}
 
+	return u.updateGroupNameInput(msg)
+}
+
+func (u *UI) updateGroupNameInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	u.groupFormName, cmd = u.groupFormName.Update(msg)
 	return u, cmd
@@ -1919,7 +1957,7 @@ func (u *UI) renderManageOverlay() string {
 		{"^n", "new"},
 		{"^e", "edit"},
 		{"^d", "delete"},
-		{"^o", "config"},
+		{"^c", "config"},
 		{"Esc", "clear/close"},
 	}))
 
