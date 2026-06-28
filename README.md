@@ -435,9 +435,8 @@ Here's a ready-to-use **Material** (Material Design dark) theme:
     "material": {
        "text":      "#E0E0E0",
        "muted":     "#9E9E9E",
-       "border":    "#2A2A2A",
+       "border":    "#FF5252",
        "accent":    "#D32F2F",
-       "accentAlt": "#FF5252",
        "warn":      "#FFB300",
        "error":     "#B71C1C",
        "heading":   "#F5F5F5",

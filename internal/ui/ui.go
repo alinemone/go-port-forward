@@ -475,7 +475,7 @@ func (u *UI) viewContent() string {
 	}
 	logBox := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(colorAccentAlt).
+		BorderForeground(colorBorder).
 		Width(logBoxWidth).
 		Render(u.viewport.View())
 	sections = append(sections, logBox)
@@ -2028,7 +2028,7 @@ func (u *UI) renderManageOverlay() string {
 		promptBody := lipgloss.JoinVertical(lipgloss.Left, promptText, "", promptKeys)
 		sections = append(sections, lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(colorAccentAlt).
+			BorderForeground(colorBorder).
 			Padding(0, 1).
 			Width(width-2).
 			Render(promptBody))
@@ -2042,7 +2042,7 @@ func (u *UI) renderManageOverlay() string {
 		confirmBody := lipgloss.JoinVertical(lipgloss.Left, confirmText, "", confirmKeys)
 		sections = append(sections, lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(colorError).
+			BorderForeground(colorBorder).
 			Padding(0, 1).
 			Width(width-2).
 			Render(confirmBody))
@@ -2429,7 +2429,7 @@ func (u *UI) renderShutdownScreen() string {
 
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(colorAccentAlt).
+		BorderForeground(colorBorder).
 		Padding(1, 4).
 		Align(lipgloss.Center).
 		Render(shutdownStyle.Render(fmt.Sprintf("%s  Stopping services, please wait...", frame)))
