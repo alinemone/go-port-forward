@@ -13,8 +13,12 @@ func main() {
 	updater.CleanupStaleArtifacts()
 	storage.NewStorage().EnsureExists()
 
-	// Load the saved color theme and apply it process-wide before any rendering.
-	if name, err := storage.NewStorage().ThemeName(); err == nil {
+	// Register any user-defined palettes, then load the saved color theme and
+	// apply it process-wide before any rendering. Registration must come first so
+	// a saved custom theme name resolves just like a built-in.
+	st := storage.NewStorage()
+	_ = st.RegisterCustomThemes()
+	if name, err := st.ThemeName(); err == nil {
 		theme.Set(name)
 		applyCLITheme()
 		ui.ApplyTheme()

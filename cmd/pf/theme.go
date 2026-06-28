@@ -17,6 +17,8 @@ import (
 // applies the choice.
 func runThemeCommand(args []string) {
 	st := storage.NewStorage()
+	// Make user-defined palettes resolvable by name (Exists/Get/Names/Set) below.
+	_ = st.RegisterCustomThemes()
 
 	action := ""
 	if len(args) > 0 {

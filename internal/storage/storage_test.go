@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/alinemone/go-port-forward/internal/theme"
 )
 
 func newTestStorage(t *testing.T) *Storage {
@@ -659,5 +661,65 @@ func TestLegacyFormatMigration(t *testing.T) {
 	}
 	if len(services) != 2 {
 		t.Fatalf("expected 2 services, got %d", len(services))
+	}
+}
+
+func TestRegisterCustomThemesFromConfig(t *testing.T) {
+	defer theme.Set("") // restore default for other tests
+
+	s := newTestStorage(t)
+	raw := `{
+	  "services": {},
+	  "theme": "mine",
+	  "themes": {
+	    "mine": { "accent": "#FF00FF", "heading": "#123456" }
+	  }
+	}`
+	if err := os.WriteFile(s.filePath, []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.RegisterCustomThemes(); err != nil {
+		t.Fatalf("RegisterCustomThemes: %v", err)
+	}
+
+	p, ok := theme.Get("mine")
+	if !ok {
+		t.Fatal("custom theme 'mine' not registered")
+	}
+	// Overridden fields take the custom value...
+	if p.Accent != "#FF00FF" {
+		t.Errorf("accent = %q, want #FF00FF", p.Accent)
+	}
+	if p.Heading != "#123456" {
+		t.Errorf("heading = %q, want #123456", p.Heading)
+	}
+	// ...while omitted fields inherit the built-in default palette.
+	def, _ := theme.Get("default")
+	if p.Text != def.Text || p.Border != def.Border {
+		t.Errorf("omitted fields should inherit default: text=%q border=%q", p.Text, p.Border)
+	}
+
+	// Selectable by name exactly like a built-in.
+	if !theme.Exists("mine") {
+		t.Error("Exists(mine) = false, want true")
+	}
+	if !theme.Set("mine") || theme.Active.Name != "mine" {
+		t.Error("Set(mine) did not activate the custom theme")
+	}
+}
+
+func TestRegisterCustomThemesBackwardCompatible(t *testing.T) {
+	// A config with no "themes" key must register nothing and not error.
+	s := newTestStorage(t)
+	if err := os.WriteFile(s.filePath, []byte(`{"services":{"web":"kubectl ..."}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before := len(theme.Names())
+	if err := s.RegisterCustomThemes(); err != nil {
+		t.Fatalf("RegisterCustomThemes: %v", err)
+	}
+	if after := len(theme.Names()); after != before {
+		t.Errorf("theme count changed from %d to %d with no custom themes", before, after)
 	}
 }

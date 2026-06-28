@@ -11,6 +11,7 @@ import (
 
 	"github.com/alinemone/go-port-forward/internal/icons"
 	"github.com/alinemone/go-port-forward/internal/model"
+	"github.com/alinemone/go-port-forward/internal/theme"
 )
 
 // IconSpec is a user-supplied icon override read from config. Either field may
@@ -29,12 +30,29 @@ type IconConfig struct {
 	Group  *IconSpec           `json:"group,omitempty"`
 }
 
+// ThemeSpec is a user-defined color palette read from config. Every field is
+// optional; any omitted color falls back to the built-in "default" theme's
+// value, so a partial theme that only sets, say, "accent" is valid. Selected by
+// putting its name in the top-level "theme" field, exactly like a built-in.
+type ThemeSpec struct {
+	Text      string `json:"text,omitempty"`
+	Muted     string `json:"muted,omitempty"`
+	Border    string `json:"border,omitempty"`
+	Accent    string `json:"accent,omitempty"`
+	AccentAlt string `json:"accentAlt,omitempty"`
+	Warn      string `json:"warn,omitempty"`
+	Error     string `json:"error,omitempty"`
+	Heading   string `json:"heading,omitempty"`
+	Selected  string `json:"selected,omitempty"`
+}
+
 type StorageData struct {
-	Services map[string]string   `json:"services"`
-	Groups   map[string][]string `json:"groups"`
-	Icon     *IconConfig         `json:"icon,omitempty"`
-	Theme    string              `json:"theme,omitempty"`
-	Legacy   map[string]string   `json:"-"`
+	Services map[string]string    `json:"services"`
+	Groups   map[string][]string  `json:"groups"`
+	Icon     *IconConfig          `json:"icon,omitempty"`
+	Theme    string               `json:"theme,omitempty"`
+	Themes   map[string]ThemeSpec `json:"themes,omitempty"`
+	Legacy   map[string]string    `json:"-"`
 }
 
 type Storage struct {
@@ -107,6 +125,49 @@ func (s *Storage) ThemeName() (string, error) {
 		return "", err
 	}
 	return data.Theme, nil
+}
+
+// RegisterCustomThemes loads user-defined palettes from the config's "themes"
+// map and registers them with the theme package so they can be selected by name
+// like the built-ins. Each spec is layered over the built-in "default" palette,
+// so omitted colors inherit sensible values. A missing or empty "themes" key is
+// a no-op, keeping configs without custom themes fully backward compatible.
+// Best-effort and idempotent: safe to call more than once.
+func (s *Storage) RegisterCustomThemes() error {
+	data, err := s.readStorage()
+	if err != nil {
+		return err
+	}
+	for name, spec := range data.Themes {
+		theme.Register(customPalette(name, spec))
+	}
+	return nil
+}
+
+// customPalette builds a theme palette for name by overlaying the non-empty
+// fields of spec onto the built-in "default" palette.
+func customPalette(name string, spec ThemeSpec) theme.Palette {
+	p, _ := theme.Get("default")
+	p.Name = name
+	for _, f := range []struct {
+		val string
+		dst *string
+	}{
+		{spec.Text, &p.Text},
+		{spec.Muted, &p.Muted},
+		{spec.Border, &p.Border},
+		{spec.Accent, &p.Accent},
+		{spec.AccentAlt, &p.AccentAlt},
+		{spec.Warn, &p.Warn},
+		{spec.Error, &p.Error},
+		{spec.Heading, &p.Heading},
+		{spec.Selected, &p.Selected},
+	} {
+		if f.val != "" {
+			*f.dst = f.val
+		}
+	}
+	return p
 }
 
 // SetTheme persists the selected theme name, preserving the rest of the config.
@@ -197,7 +258,7 @@ func (s *Storage) readStorage() (*StorageData, error) {
 	}
 
 	var storageData StorageData
-	if err := json.Unmarshal(data, &storageData); err == nil && (storageData.Services != nil || storageData.Groups != nil || storageData.Icon != nil || storageData.Theme != "") {
+	if err := json.Unmarshal(data, &storageData); err == nil && (storageData.Services != nil || storageData.Groups != nil || storageData.Icon != nil || storageData.Theme != "" || storageData.Themes != nil) {
 		if storageData.Services == nil {
 			storageData.Services = make(map[string]string)
 		}

@@ -85,6 +85,22 @@ func Get(name string) (Palette, bool) {
 	return p, ok
 }
 
+// Register adds a custom palette, or overrides a built-in one of the same name,
+// making it available to Get, Exists, Set, and Names. Custom themes loaded from
+// user config are registered at startup, before the saved theme is applied, so
+// they behave exactly like the built-ins. A palette with an empty Name is
+// ignored. Registering a new name appends it to the display order; re-registering
+// an existing name updates its colors in place without reordering.
+func Register(p Palette) {
+	if p.Name == "" {
+		return
+	}
+	if _, exists := palettes[p.Name]; !exists {
+		order = append(order, p.Name)
+	}
+	palettes[p.Name] = p
+}
+
 // Set switches the Active palette by name. Unknown names leave Active unchanged
 // and return false. An empty name selects the default theme.
 func Set(name string) bool {

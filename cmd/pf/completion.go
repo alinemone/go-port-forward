@@ -113,6 +113,8 @@ func completeGroupThenServices(_ *cobra.Command, args []string, toComplete strin
 }
 
 func completeThemes(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+	// Best-effort so user-defined palettes complete alongside the built-ins.
+	_ = storage.NewStorage().RegisterCustomThemes()
 	return append(theme.Names(), "list"), cobra.ShellCompDirectiveNoFileComp
 }
 

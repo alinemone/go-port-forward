@@ -419,6 +419,59 @@ Each override is merged onto the built-in: set both `glyph` and `color` to fully
 an icon (or add one for a port the built-ins don't cover), or set just `color` to recolor
 a built-in glyph. Paste glyphs from a [Nerd Font](https://www.nerdfonts.com/cheat-sheet).
 
+### 🎨 Custom Color Themes
+
+Besides the built-in themes (`default`, `ocean`, `sunset`), you can define your own
+palettes under a top-level `themes` map in `~/.pf/services.json`. A custom theme is
+selectable exactly like a built-in — by name — via `pf theme <name>` or the top-level
+`theme` field.
+
+Here's a ready-to-use **Material** (Material Design dark) theme:
+
+```json
+{
+  "theme": "material",
+  "themes": {
+    "material": {
+       "text":      "#E0E0E0",
+       "muted":     "#9E9E9E",
+       "border":    "#2A2A2A",
+       "accent":    "#D32F2F",
+       "accentAlt": "#FF5252",
+       "warn":      "#FFB300",
+       "error":     "#B71C1C",
+       "heading":   "#F5F5F5",
+       "selected":  "#8E0000"
+    }
+  }
+}
+```
+
+Then activate it:
+
+```bash
+pf theme material   # or set "theme": "material" by hand (already done above)
+pf theme            # list themes (custom ones appear alongside the built-ins)
+```
+
+Every field is optional and merged onto the built-in `default` palette, so a partial
+theme that only sets, say, `accent` and `heading` is valid — the rest is inherited.
+
+| Field | Used for |
+|-------|----------|
+| `text`      | primary foreground text |
+| `muted`     | secondary / dim text |
+| `border`    | box borders and rules |
+| `accent`    | cursor, names, titles, group icon |
+| `accentAlt` | success / healthy emphasis |
+| `warn`      | warnings, section emphasis |
+| `error`     | errors |
+| `heading`   | headings, table headers, default icon |
+| `selected`  | selected-row background |
+
+> Service-health colors (green/yellow/red for healthy/connecting/error) are intentionally
+> fixed across every theme so status always reads the same.
+
 ### Cleanup Stuck Ports
 
 ```bash
