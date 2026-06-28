@@ -9,39 +9,9 @@ import (
 
 	"github.com/alinemone/go-port-forward/internal/manager"
 	"github.com/alinemone/go-port-forward/internal/storage"
-	"github.com/alinemone/go-port-forward/internal/stringutil"
 
 	"charm.land/lipgloss/v2"
 )
-
-func runGroupCommand(args []string) {
-	if len(args) < 1 {
-		showGroupUsage()
-		os.Exit(1)
-	}
-
-	subCmd := stringutil.NormalizeToken(args[0])
-	st := storage.NewStorage()
-
-	switch subCmd {
-	case "add", "a":
-		runGroupAddCommand(st, args[1:])
-	case "list", "ls", "l":
-		runGroupListCommand(st)
-	case "delete", "rm", "d":
-		runGroupDeleteCommand(st, args[1:])
-	case "rename", "ren", "mv":
-		runGroupRenameCommand(st, args[1:])
-	case "add-service", "addsvc", "as":
-		runGroupAddServiceCommand(st, args[1:])
-	case "remove-service", "rmsvc", "rs":
-		runGroupRemoveServiceCommand(st, args[1:])
-	default:
-		fmt.Printf("Unknown group command: %s\n", subCmd)
-		showGroupUsage()
-		os.Exit(1)
-	}
-}
 
 func splitNameList(args []string) []string {
 	input := strings.Join(args, " ")

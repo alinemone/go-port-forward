@@ -125,6 +125,7 @@ func showUsage() {
 	helpSection("Maintenance", "")
 	helpRow("c, cleanup [--all]", "Free stuck ports (--all kills every kubectl/ssh)")
 	helpRow("edit", "Advanced: edit everything as JSON in your $EDITOR")
+	helpRow("completion install [shell]", "Set up Tab-completion (bash/zsh/fish/powershell)")
 	helpRow("u, update [--yes|--force]", "Update pf to the newest version")
 	helpRow("v, version", "Show the installed version")
 	helpRow("h, help", "Show this help")
@@ -147,6 +148,7 @@ func showUsage() {
 	helpNote("Run `pf group`, `pf cert` or `pf update` with no arguments for focused help.")
 	helpNote("Icons are off by default (need a Nerd Font) — turn on with `pf icon on`.")
 	helpNote("Your settings live in ~/.pf/services.json — `pf edit` opens it safely.")
+	helpNote("Tab-completion: run `pf completion install` once (bash/zsh/fish/powershell).")
 
 	lipgloss.Println()
 	lipgloss.Println("  " + cliBorder.Render("https://github.com/alinemone/go-port-forward"))

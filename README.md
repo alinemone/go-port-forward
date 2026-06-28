@@ -178,8 +178,103 @@ pf list
 | `cleanup`| `c`  | Free configured ports (`--all` kills all kubectl/ssh) |
 | `group` | `g`   | Manage groups (add/add-service/remove-service/list/delete/rename) |
 | `cert`  |       | Manage certificates (add/list/remove) |
+| `icon`  |       | Toggle Nerd Font icons (`on`/`off`/`status`) |
+| `theme` |       | Switch color theme (`default`/`ocean`/`sunset`) |
+| `update`| `u`   | Update pf to the latest GitHub release |
+| `completion` |  | Generate / install shell completion (see below) |
 | `version`  | `v`  | Show build version details |
 | `help`  | `h`   | Show help |
+
+> Tip: you don't even need `run` — typing a service or group name runs it
+> directly (`pf db`, `pf backend`, `pf db,redis`).
+
+## ⌨️ Tab Completion (Autocomplete)
+
+`pf` ships shell completion for **bash, zsh, fish and PowerShell**. Once enabled,
+Tab completes commands and their aliases, plus **dynamic values** read from your
+config — service names, group names, theme names, and `on/off/status` for icons.
+
+Multiple targets complete too: keep adding services after a comma (`pf r db,re⇥`)
+or a space (`pf r db re⇥`) — already-chosen names are filtered out.
+
+### Quick setup (recommended)
+
+```bash
+pf completion install            # auto-detects your shell
+# or be explicit:
+pf completion install bash
+pf completion install zsh
+pf completion install fish
+pf completion install powershell
+```
+
+This writes the script under `~/.pf/completion/` and wires it into your shell
+config **idempotently** (safe to re-run). Then reload your shell (or open a new
+terminal). For PowerShell it resolves the real `$PROFILE` for you — no more
+"directory not found".
+
+> The completion script just calls the `pf` binary, so after upgrading `pf` you
+> **don't** need to re-install — completion updates automatically. Make sure `pf`
+> is on your `PATH` (e.g. `/usr/local/bin/pf`) so the shell triggers it.
+
+### Manual setup
+
+If you'd rather place the script yourself, print it and redirect:
+
+```bash
+# bash (Linux/macOS/Git-Bash) — no bash-completion package required
+pf completion bash > ~/.local/share/bash-completion/completions/pf
+#   or: echo 'source <(pf completion bash)' >> ~/.bashrc
+
+# zsh
+pf completion zsh > "${fpath[1]}/_pf"     # then: compinit
+
+# fish
+pf completion fish > ~/.config/fish/completions/pf.fish
+```
+
+```powershell
+# PowerShell — current session:
+pf completion powershell | Out-String | Invoke-Expression
+# permanent:
+if (!(Test-Path $PROFILE)) { New-Item -ItemType File -Path $PROFILE -Force }
+pf completion powershell >> $PROFILE
+. $PROFILE
+```
+
+### Show ALL options on Tab
+
+**PowerShell** cycles through matches one-by-one by default. To pop up a menu of
+**all** options on Tab, switch to `MenuComplete`:
+
+```powershell
+# this session:
+Set-PSReadLineKeyHandler -Key Tab -Function MenuComplete
+# permanent:
+Add-Content $PROFILE 'Set-PSReadLineKeyHandler -Key Tab -Function MenuComplete'
+. $PROFILE
+```
+
+> `Ctrl+Space` already shows the menu without any change. Optional niceties:
+> `Set-PSReadLineOption -PredictionSource HistoryAndPlugin` and
+> `Set-PSReadLineOption -PredictionViewStyle ListView`.
+> (PSReadLine ships with PowerShell 5.1+ and PowerShell 7.)
+
+**bash** beeps on an ambiguous prefix (e.g. `db` when you have `db` and `dastyar`).
+Press Tab **twice** to list matches, or enable single-Tab listing in `~/.inputrc`:
+
+```
+set show-all-if-ambiguous on
+```
+
+> Ubuntu's default terminal is **bash**, so `pf completion install bash` is all you
+> need there. If you switched your shell to zsh, use `pf completion install zsh`.
+
+### Note for cmd.exe
+
+The classic Windows **Command Prompt (cmd.exe)** has no programmable completion
+API, so Tab-completion isn't available there. Use **PowerShell** (recommended on
+Windows) or Git-Bash.
 
 ## 🔐 Certificate Management
 

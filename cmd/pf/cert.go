@@ -5,37 +5,9 @@ import (
 	"os"
 
 	"github.com/alinemone/go-port-forward/internal/cert"
-	"github.com/alinemone/go-port-forward/internal/stringutil"
 
 	"charm.land/lipgloss/v2"
 )
-
-func runCertCommand(args []string) {
-	if len(args) < 1 {
-		showCertUsage()
-		os.Exit(1)
-	}
-
-	subCmd := stringutil.NormalizeToken(args[0])
-	certMgr, err := cert.NewManager()
-	if err != nil {
-		fmt.Printf("Error: Failed to initialize certificate manager: %v\n", err)
-		os.Exit(1)
-	}
-
-	switch subCmd {
-	case "add":
-		runCertAddCommand(certMgr, args[1:])
-	case "list", "ls":
-		runCertListCommand(certMgr)
-	case "remove", "rm", "delete":
-		runCertRemoveCommand(certMgr)
-	default:
-		fmt.Printf("Unknown cert command: %s\n", subCmd)
-		showCertUsage()
-		os.Exit(1)
-	}
-}
 
 func runCertAddCommand(certMgr *cert.Manager, args []string) {
 	if len(args) < 1 {

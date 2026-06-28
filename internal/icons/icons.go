@@ -38,7 +38,7 @@ func ForPort(port string) Icon {
 	case "5672":
 		return Icon{Glyph: "", Color: "#FF6600"} // nf-fa-cubes
 	case "9092":
-		return Icon{Glyph: "", Color: "#8B5CF6"} // nf-fa-sitemap
+		return Icon{Glyph: "󱀏", Color: "#8B5CF6"} // nf-md-apache_kafka
 	default:
 		// Unknown ports use the neutral "default" icon, colored from the theme.
 		return Icon{Glyph: DefaultGlyph, Color: theme.Active.Heading}
