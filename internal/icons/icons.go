@@ -1,5 +1,10 @@
 package icons
 
+import "github.com/alinemone/go-port-forward/internal/theme"
+
+// Per-port colors below are deliberately fixed brand colors (a Postgres icon is
+// always Postgres-blue, etc.) and don't follow the switchable chrome theme. The
+// fallback (default) and group icon colors DO follow the active theme.
 const (
 	DefaultGlyph = "" // nf-fa-cube
 	DefaultColor = "#AEB9CC"
@@ -7,7 +12,6 @@ const (
 	// Built-in group icon (nf-fa-folder, U+F07B). Lives in the Private Use
 	// Area, so it renders as a blank box without a Nerd Font installed.
 	groupGlyph = ""
-	groupColor = "#5BD4FF"
 )
 
 type Icon struct {
@@ -36,13 +40,15 @@ func ForPort(port string) Icon {
 	case "9092":
 		return Icon{Glyph: "", Color: "#8B5CF6"} // nf-fa-sitemap
 	default:
-		return Icon{Glyph: DefaultGlyph, Color: DefaultColor}
+		// Unknown ports use the neutral "default" icon, colored from the theme.
+		return Icon{Glyph: DefaultGlyph, Color: theme.Active.Heading}
 	}
 }
 
-// ForGroup returns the built-in icon shown for a group of services.
+// ForGroup returns the built-in icon shown for a group of services. Its color
+// follows the active chrome theme (the glyph is fixed).
 func ForGroup() Icon {
-	return Icon{Glyph: groupGlyph, Color: groupColor}
+	return Icon{Glyph: groupGlyph, Color: theme.Active.Accent}
 }
 
 // Set resolves icons from user-supplied overrides layered on top of the

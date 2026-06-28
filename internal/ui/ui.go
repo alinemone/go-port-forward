@@ -22,6 +22,7 @@ import (
 	"github.com/alinemone/go-port-forward/internal/model"
 	"github.com/alinemone/go-port-forward/internal/storage"
 	"github.com/alinemone/go-port-forward/internal/stringutil"
+	"github.com/alinemone/go-port-forward/internal/theme"
 )
 
 type tickMsg time.Time
@@ -44,17 +45,45 @@ type editResultMsg struct {
 	tmpPath  string
 }
 
+// Chrome colors come from the active palette (internal/theme). They are filled
+// by ApplyTheme so the user's theme choice takes effect process-wide; the TUI
+// builds its styles per-render from these vars, so no caching gets stale.
 var (
-	colorText      = lipgloss.Color("#EAEEF5")
-	colorMuted     = lipgloss.Color("#7C879B")
-	colorBorder    = lipgloss.Color("#33415A")
-	colorAccent    = lipgloss.Color("#5BD4FF")
-	colorAccentAlt = lipgloss.Color("#73FFB6")
-	colorWarn      = lipgloss.Color("#FFD166")
-	colorError     = lipgloss.Color("#FF6B6B")
-	colorHeading   = lipgloss.Color("#AEB9CC")
-	colorSelected  = lipgloss.Color("#1E3A5F")
+	colorText      color.Color
+	colorMuted     color.Color
+	colorBorder    color.Color
+	colorAccent    color.Color
+	colorAccentAlt color.Color
+	colorWarn      color.Color
+	colorError     color.Color
+	colorHeading   color.Color
+	colorSelected  color.Color
 )
+
+// Service-health colors are fixed (never themed) so HEALTHY always reads green,
+// CONNECTING yellow, and ERROR red regardless of the active palette.
+var (
+	statusHealthyColor    = lipgloss.Color(theme.StatusHealthy)
+	statusConnectingColor = lipgloss.Color(theme.StatusConnecting)
+	statusErrorColor      = lipgloss.Color(theme.StatusError)
+)
+
+func init() { ApplyTheme() }
+
+// ApplyTheme refreshes the package-level chrome colors from theme.Active. Call
+// it once at startup after selecting the theme (init seeds the default).
+func ApplyTheme() {
+	p := theme.Active
+	colorText = lipgloss.Color(p.Text)
+	colorMuted = lipgloss.Color(p.Muted)
+	colorBorder = lipgloss.Color(p.Border)
+	colorAccent = lipgloss.Color(p.Accent)
+	colorAccentAlt = lipgloss.Color(p.AccentAlt)
+	colorWarn = lipgloss.Color(p.Warn)
+	colorError = lipgloss.Color(p.Error)
+	colorHeading = lipgloss.Color(p.Heading)
+	colorSelected = lipgloss.Color(p.Selected)
+}
 
 type manageRowKind int
 
@@ -1475,15 +1504,15 @@ func renderServiceTable(services []model.Service, selectedIndex, offset, maxVisi
 
 		switch svc.Status {
 		case model.StatusHealthy:
-			statusColor = colorAccentAlt
+			statusColor = statusHealthyColor
 			statusIcon = "●"
 			statusText = "HEALTHY"
 		case model.StatusConnecting:
-			statusColor = colorWarn
+			statusColor = statusConnectingColor
 			statusIcon = "◐"
 			statusText = "CONNECTING"
 		case model.StatusError:
-			statusColor = colorError
+			statusColor = statusErrorColor
 			statusIcon = "✗"
 			statusText = "ERROR"
 		}

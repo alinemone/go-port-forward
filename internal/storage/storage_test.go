@@ -536,6 +536,34 @@ func TestSetIconEnabledCreatesConfigWhenMissing(t *testing.T) {
 	}
 }
 
+func TestSetAndGetTheme(t *testing.T) {
+	s := newTestStorage(t)
+
+	if name, err := s.ThemeName(); err != nil || name != "" {
+		t.Fatalf("default theme should be empty, got %q (err %v)", name, err)
+	}
+
+	if err := s.AddService("db", "kubectl port-forward svc/db 5432:5432"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetTheme("ocean"); err != nil {
+		t.Fatalf("SetTheme: %v", err)
+	}
+
+	name, err := s.ThemeName()
+	if err != nil {
+		t.Fatalf("ThemeName: %v", err)
+	}
+	if name != "ocean" {
+		t.Fatalf("theme = %q, want ocean", name)
+	}
+
+	// Theme must coexist with services without clobbering them.
+	if _, err := s.GetService("db"); err != nil {
+		t.Fatalf("service lost after SetTheme: %v", err)
+	}
+}
+
 func TestIconSetDisabledByDefault(t *testing.T) {
 	s := newTestStorage(t)
 	if err := os.WriteFile(s.filePath, []byte(`{"services":{},"groups":{}}`), 0644); err != nil {

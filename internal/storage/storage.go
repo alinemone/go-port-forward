@@ -33,6 +33,7 @@ type StorageData struct {
 	Services map[string]string   `json:"services"`
 	Groups   map[string][]string `json:"groups"`
 	Icon     *IconConfig         `json:"icon,omitempty"`
+	Theme    string              `json:"theme,omitempty"`
 	Legacy   map[string]string   `json:"-"`
 }
 
@@ -97,6 +98,25 @@ func (s *Storage) SaveData(data *StorageData) error {
 
 func (s *Storage) LoadData() (*StorageData, error) {
 	return s.readStorage()
+}
+
+// ThemeName returns the saved theme name ("" when none is set, meaning default).
+func (s *Storage) ThemeName() (string, error) {
+	data, err := s.readStorage()
+	if err != nil {
+		return "", err
+	}
+	return data.Theme, nil
+}
+
+// SetTheme persists the selected theme name, preserving the rest of the config.
+func (s *Storage) SetTheme(name string) error {
+	data, err := s.readStorage()
+	if err != nil {
+		return err
+	}
+	data.Theme = name
+	return s.writeStorage(data)
 }
 
 func (s *Storage) IconEnabled() (bool, error) {
@@ -177,7 +197,7 @@ func (s *Storage) readStorage() (*StorageData, error) {
 	}
 
 	var storageData StorageData
-	if err := json.Unmarshal(data, &storageData); err == nil && (storageData.Services != nil || storageData.Groups != nil || storageData.Icon != nil) {
+	if err := json.Unmarshal(data, &storageData); err == nil && (storageData.Services != nil || storageData.Groups != nil || storageData.Icon != nil || storageData.Theme != "") {
 		if storageData.Services == nil {
 			storageData.Services = make(map[string]string)
 		}

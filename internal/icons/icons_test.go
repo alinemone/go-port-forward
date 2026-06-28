@@ -1,6 +1,32 @@
 package icons
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/alinemone/go-port-forward/internal/theme"
+)
+
+func TestGroupAndDefaultFollowActiveTheme(t *testing.T) {
+	defer theme.Set("") // restore default for other tests
+
+	theme.Set("default")
+	if got := ForGroup().Color; got != "#2DD4BF" {
+		t.Errorf("default group color = %q, want turquoise green", got)
+	}
+	if got := ForPort("99999").Color; got != "#AEB9CC" {
+		t.Errorf("default fallback color = %q, want heading gray", got)
+	}
+
+	theme.Set("ocean")
+	if got := ForGroup().Color; got != "#5BD4FF" {
+		t.Errorf("ocean group color = %q, want blue", got)
+	}
+
+	// Per-technology brand colors must NOT change with the theme.
+	if got := ForPort("5432").Color; got != "#24829E" {
+		t.Errorf("postgres icon color changed with theme: %q", got)
+	}
+}
 
 func TestForPortKnownPorts(t *testing.T) {
 	for _, port := range []string{"80", "443", "5432", "3306", "6379", "27017", "9200", "5672", "9092"} {
