@@ -22,6 +22,10 @@ func TestServiceStruct(t *testing.T) {
 		Name:         "test-svc",
 		Command:      "kubectl port-forward svc/test 8080:80",
 		LocalPort:    "8080",
+		MainPort:     "80",
+		IconEnabled:  true,
+		IconGlyph:    "G",
+		IconColor:    "#5BD4FF",
 		Status:       StatusConnecting,
 		StartTime:    time.Now(),
 		RestartCount: 0,
@@ -33,6 +37,15 @@ func TestServiceStruct(t *testing.T) {
 	}
 	if svc.LocalPort != "8080" {
 		t.Errorf("LocalPort = %q", svc.LocalPort)
+	}
+	if svc.MainPort != "80" {
+		t.Errorf("MainPort = %q", svc.MainPort)
+	}
+	if !svc.IconEnabled {
+		t.Error("IconEnabled should be true")
+	}
+	if svc.IconGlyph != "G" || svc.IconColor != "#5BD4FF" {
+		t.Errorf("icon = %q/%q", svc.IconGlyph, svc.IconColor)
 	}
 }
 

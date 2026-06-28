@@ -3,6 +3,8 @@ package manager
 import (
 	"strings"
 	"testing"
+
+	"github.com/alinemone/go-port-forward/internal/model"
 )
 
 func TestClassifyOutputLine(t *testing.T) {
@@ -182,6 +184,28 @@ func TestEnsureValidCommand(t *testing.T) {
 		if err := ensureValidCommand(cmd); err == nil {
 			t.Errorf("ensureValidCommand(%q) should fail", cmd)
 		}
+	}
+}
+
+func TestRunningServiceSnapshotIncludesIconFields(t *testing.T) {
+	svc := &runningService{
+		name:        "web",
+		command:     "kubectl port-forward svc/web 8080:80",
+		localPort:   "8080",
+		mainPort:    "80",
+		iconEnabled: true,
+		status:      model.StatusHealthy,
+	}
+
+	snapshot := svc.snapshot()
+	if snapshot.LocalPort != "8080" {
+		t.Fatalf("LocalPort = %q, want 8080", snapshot.LocalPort)
+	}
+	if snapshot.MainPort != "80" {
+		t.Fatalf("MainPort = %q, want 80", snapshot.MainPort)
+	}
+	if !snapshot.IconEnabled {
+		t.Fatal("IconEnabled should be true")
 	}
 }
 

@@ -420,6 +420,199 @@ func TestMigrateLegacyStorageDoesNotOverwrite(t *testing.T) {
 	}
 }
 
+func TestIconConfigLoads(t *testing.T) {
+	s := newTestStorage(t)
+	content := []byte(`{
+		"icon": {"enable": true},
+		"services": {"db": "kubectl port-forward svc/db 5432:5432"},
+		"groups": {}
+	}`)
+	if err := os.WriteFile(s.filePath, content, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := s.LoadData()
+	if err != nil {
+		t.Fatalf("LoadData: %v", err)
+	}
+	if data.Icon == nil || !data.Icon.Enable {
+		t.Fatalf("expected icon config enabled, got %#v", data.Icon)
+	}
+
+	enabled, err := s.IconEnabled()
+	if err != nil {
+		t.Fatalf("IconEnabled: %v", err)
+	}
+	if !enabled {
+		t.Fatal("expected icons enabled")
+	}
+}
+
+func TestIconSetAppliesCustomOverrides(t *testing.T) {
+	s := newTestStorage(t)
+	content := []byte(`{
+		"icon": {
+			"enable": true,
+			"ports": {
+				"7000": {"glyph": "X", "color": "#FF0000"},
+				"5432": {"color": "#000000"}
+			},
+			"group": {"glyph": "G", "color": "#123456"}
+		},
+		"services": {},
+		"groups": {}
+	}`)
+	if err := os.WriteFile(s.filePath, content, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	set, enabled, err := s.IconSet()
+	if err != nil {
+		t.Fatalf("IconSet: %v", err)
+	}
+	if !enabled {
+		t.Fatal("expected icons enabled")
+	}
+	if got := set.ForPort("7000"); got.Glyph != "X" || got.Color != "#FF0000" {
+		t.Errorf("unknown-port override = %#v", got)
+	}
+	if got := set.ForPort("5432"); got.Color != "#000000" {
+		t.Errorf("color-only override = %#v", got)
+	}
+	if got := set.ForGroup(); got.Glyph != "G" || got.Color != "#123456" {
+		t.Errorf("group override = %#v", got)
+	}
+}
+
+func TestSetIconEnabledTogglesAndPreservesOverrides(t *testing.T) {
+	s := newTestStorage(t)
+	content := []byte(`{
+		"icon": {"enable": false, "ports": {"7000": {"glyph": "X", "color": "#FF0000"}}},
+		"services": {},
+		"groups": {}
+	}`)
+	if err := os.WriteFile(s.filePath, content, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.SetIconEnabled(true); err != nil {
+		t.Fatalf("SetIconEnabled(true): %v", err)
+	}
+
+	data, err := s.LoadData()
+	if err != nil {
+		t.Fatalf("LoadData: %v", err)
+	}
+	if data.Icon == nil || !data.Icon.Enable {
+		t.Fatalf("expected icons enabled, got %#v", data.Icon)
+	}
+	if spec, ok := data.Icon.Ports["7000"]; !ok || spec.Glyph != "X" {
+		t.Errorf("custom override must be preserved, got %#v", data.Icon.Ports)
+	}
+
+	if err := s.SetIconEnabled(false); err != nil {
+		t.Fatalf("SetIconEnabled(false): %v", err)
+	}
+	enabled, _ := s.IconEnabled()
+	if enabled {
+		t.Error("expected icons disabled after toggle off")
+	}
+}
+
+func TestSetIconEnabledCreatesConfigWhenMissing(t *testing.T) {
+	s := newTestStorage(t)
+	if err := s.AddService("db", "kubectl port-forward svc/db 5432:5432"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetIconEnabled(true); err != nil {
+		t.Fatalf("SetIconEnabled: %v", err)
+	}
+	enabled, err := s.IconEnabled()
+	if err != nil {
+		t.Fatalf("IconEnabled: %v", err)
+	}
+	if !enabled {
+		t.Fatal("expected icons enabled after enabling on a config without an icon block")
+	}
+}
+
+func TestIconSetDisabledByDefault(t *testing.T) {
+	s := newTestStorage(t)
+	if err := os.WriteFile(s.filePath, []byte(`{"services":{},"groups":{}}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	set, enabled, err := s.IconSet()
+	if err != nil {
+		t.Fatalf("IconSet: %v", err)
+	}
+	if enabled {
+		t.Fatal("icons must be OFF by default (Nerd Font dependency)")
+	}
+	if set == nil {
+		t.Fatal("IconSet must always return a usable resolver")
+	}
+}
+
+func TestIconConfigDefaultsDisabled(t *testing.T) {
+	s := newTestStorage(t)
+	content := []byte(`{
+		"services": {"db": "kubectl port-forward svc/db 5432:5432"},
+		"groups": {}
+	}`)
+	if err := os.WriteFile(s.filePath, content, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	enabled, err := s.IconEnabled()
+	if err != nil {
+		t.Fatalf("IconEnabled: %v", err)
+	}
+	if enabled {
+		t.Fatal("expected icons disabled by default")
+	}
+}
+
+func TestSavePreservesIconConfig(t *testing.T) {
+	s := newTestStorage(t)
+	if err := s.SaveData(&StorageData{
+		Services: map[string]string{"db": "kubectl port-forward svc/db 5432:5432"},
+		Groups:   map[string][]string{},
+		Icon:     &IconConfig{Enable: true},
+	}); err != nil {
+		t.Fatalf("SaveData: %v", err)
+	}
+
+	if err := s.AddService("redis", "kubectl port-forward svc/redis 6379:6379"); err != nil {
+		t.Fatalf("AddService: %v", err)
+	}
+
+	data, err := s.LoadData()
+	if err != nil {
+		t.Fatalf("LoadData: %v", err)
+	}
+	if data.Icon == nil || !data.Icon.Enable {
+		t.Fatalf("icon config was not preserved: %#v", data.Icon)
+	}
+}
+
+func TestIconOnlyStructuredConfig(t *testing.T) {
+	s := newTestStorage(t)
+	if err := os.WriteFile(s.filePath, []byte(`{"icon":{"enable":true}}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := s.LoadData()
+	if err != nil {
+		t.Fatalf("LoadData: %v", err)
+	}
+	if data.Services == nil || data.Groups == nil {
+		t.Fatal("expected non-nil maps")
+	}
+	if data.Icon == nil || !data.Icon.Enable {
+		t.Fatalf("expected icon config, got %#v", data.Icon)
+	}
+}
+
 func TestLegacyFormatMigration(t *testing.T) {
 	s := newTestStorage(t)
 

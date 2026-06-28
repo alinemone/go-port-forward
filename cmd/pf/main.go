@@ -23,7 +23,41 @@ import (
 	"github.com/alinemone/go-port-forward/internal/version"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
+
+// CLI list styling. Hex values mirror the TUI palette (see internal/ui) so the
+// command-line lists read with the same brand colors as the interactive view.
+// lipgloss auto-detects the terminal and drops color when piped to a non-TTY.
+var (
+	cliHeading = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#AEB9CC"))
+	cliCount   = lipgloss.NewStyle().Foreground(lipgloss.Color("#7C879B")).Italic(true)
+	cliIndex   = lipgloss.NewStyle().Foreground(lipgloss.Color("#7C879B"))
+	cliName    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#5BD4FF"))
+	cliArrow   = lipgloss.NewStyle().Foreground(lipgloss.Color("#73FFB6"))
+	cliDetail  = lipgloss.NewStyle().Foreground(lipgloss.Color("#EAEEF5"))
+	cliMuted   = lipgloss.NewStyle().Foreground(lipgloss.Color("#7C879B"))
+	cliTitle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#5BD4FF"))
+	cliBorder  = lipgloss.NewStyle().Foreground(lipgloss.Color("#33415A"))
+)
+
+// printList renders a titled, numbered list with a consistent two-line item
+// layout: "  N. <title>" then "     → <detail>". headingMeta is an optional
+// dim suffix on the heading (e.g. a count).
+func printList(heading, headingMeta string, items [][2]string) {
+	lipgloss.Println()
+	line := cliHeading.Render(heading)
+	if headingMeta != "" {
+		line += cliCount.Render("  " + headingMeta)
+	}
+	lipgloss.Println(line)
+	lipgloss.Println()
+	for i, it := range items {
+		lipgloss.Printf("  %s %s\n", cliIndex.Render(fmt.Sprintf("%2d.", i+1)), cliName.Render(it[0]))
+		lipgloss.Printf("     %s %s\n", cliArrow.Render("→"), cliDetail.Render(it[1]))
+	}
+	lipgloss.Println()
+}
 
 func main() {
 	updater.CleanupStaleArtifacts()
@@ -61,6 +95,8 @@ func main() {
 		runCertCommand(args)
 	case "edit", "config":
 		runEditCommand()
+	case "icon", "icons":
+		runIconCommand(args)
 	case "h", "help":
 		showUsage()
 	case "v", "version":
@@ -68,9 +104,83 @@ func main() {
 	case "u", "update":
 		runUpdateCommand(args)
 	default:
-		fmt.Printf("Unknown command: %s\n", cmd)
-		fmt.Println("Run 'pf help' for usage")
+		// Bare `pf <service|group>` is a shortcut for `pf run <service|group>`,
+		// but only when the first token actually names something runnable — a
+		// genuine typo still falls through to the unknown-command message.
+		if looksLikeRunTarget(storage.NewStorage(), strings.Join(os.Args[1:], " ")) {
+			runStartCommand(os.Args[1:])
+			return
+		}
+		lipgloss.Println(cliMuted.Render("Unknown command: " + cmd))
+		lipgloss.Println(cliMuted.Render("Run 'pf help' for usage"))
 		os.Exit(1)
+	}
+}
+
+// looksLikeRunTarget reports whether the first whitespace/comma-separated token
+// names an existing service or group, so a bare `pf <name>` can be treated as a
+// run. Read-only and quiet: it never prints or mutates storage.
+func looksLikeRunTarget(st runTargetStore, input string) bool {
+	fields := strings.FieldsFunc(input, func(r rune) bool {
+		return r == ',' || unicode.IsSpace(r)
+	})
+	if len(fields) == 0 {
+		return false
+	}
+	first := fields[0]
+	if _, err := st.GetService(first); err == nil {
+		return true
+	}
+	if _, err := st.GetGroupServices(first); err == nil {
+		return true
+	}
+	return false
+}
+
+func runIconCommand(args []string) {
+	st := storage.NewStorage()
+
+	action := ""
+	if len(args) > 0 {
+		action = strings.ToLower(strings.TrimSpace(args[0]))
+	}
+
+	switch action {
+	case "", "status":
+		enabled, err := st.IconEnabled()
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+			os.Exit(1)
+		}
+		printIconStatus(enabled)
+	case "on", "enable", "true":
+		setIcons(st, true)
+	case "off", "disable", "false":
+		setIcons(st, false)
+	default:
+		fmt.Printf("Unknown option: %s\n", action)
+		fmt.Println("Usage: pf icon [on|off|status]")
+		os.Exit(1)
+	}
+}
+
+func setIcons(st *storage.Storage, enabled bool) {
+	if err := st.SetIconEnabled(enabled); err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+	printIconStatus(enabled)
+	if enabled {
+		fmt.Println("Note: icons need a Nerd Font (https://www.nerdfonts.com) — without")
+		fmt.Println("one they render as blank boxes. Set your terminal to a Nerd Font.")
+	}
+}
+
+func printIconStatus(enabled bool) {
+	if enabled {
+		fmt.Println("✓ Service icons: ON")
+	} else {
+		fmt.Println("○ Service icons: OFF")
 	}
 }
 
@@ -102,12 +212,9 @@ func runListCommand() {
 	}
 
 	if len(services) == 0 {
-		fmt.Println("No services found")
+		lipgloss.Println(cliMuted.Render("No services found"))
 		return
 	}
-
-	fmt.Println("\nServices:")
-	fmt.Println()
 
 	names := make([]string, 0, len(services))
 	for name := range services {
@@ -115,11 +222,11 @@ func runListCommand() {
 	}
 	sort.Strings(names)
 
-	for i, name := range names {
-		fmt.Printf("  %d. %s\n", i+1, name)
-		fmt.Printf("     → %s\n", services[name])
+	items := make([][2]string, 0, len(names))
+	for _, name := range names {
+		items = append(items, [2]string{name, services[name]})
 	}
-	fmt.Println()
+	printList("Services", fmt.Sprintf("(%d)", len(items)), items)
 }
 
 func runStartCommand(args []string) {
@@ -537,13 +644,10 @@ func runGroupListCommand(st *storage.Storage) {
 	}
 
 	if len(groups) == 0 {
-		fmt.Println("No groups found")
-		fmt.Println("Use 'pf group add <name> <services>' to create a group")
+		lipgloss.Println(cliMuted.Render("No groups found"))
+		lipgloss.Println(cliMuted.Render("Use 'pf group add <name> <services>' to create a group"))
 		return
 	}
-
-	fmt.Println("\nGroups:")
-	fmt.Println()
 
 	names := make([]string, 0, len(groups))
 	for name := range groups {
@@ -551,12 +655,17 @@ func runGroupListCommand(st *storage.Storage) {
 	}
 	sort.Strings(names)
 
-	for i, name := range names {
+	items := make([][2]string, 0, len(names))
+	for _, name := range names {
 		services := groups[name]
-		fmt.Printf("  %d. %s (%d services)\n", i+1, name, len(services))
-		fmt.Printf("     → %s\n", strings.Join(services, ", "))
+		title := fmt.Sprintf("%s  (%d)", name, len(services))
+		detail := strings.Join(services, ", ")
+		if detail == "" {
+			detail = "(empty)"
+		}
+		items = append(items, [2]string{title, detail})
 	}
-	fmt.Println()
+	printList("Groups", fmt.Sprintf("(%d)", len(items)), items)
 }
 
 func runGroupDeleteCommand(st *storage.Storage, args []string) {
@@ -630,17 +739,22 @@ func runCertAddCommand(certMgr *cert.Manager, args []string) {
 func runCertListCommand(certMgr *cert.Manager) {
 	config, exists := certMgr.GetCertificate()
 	if !exists {
-		fmt.Println("No certificate configured")
-		fmt.Println("Use 'pf cert add <p12-file>' to add a certificate")
+		lipgloss.Println(cliMuted.Render("No certificate configured"))
+		lipgloss.Println(cliMuted.Render("Use 'pf cert add <p12-file>' to add a certificate"))
 		return
 	}
 
-	fmt.Println("\n📜 Configured Certificate:")
-	fmt.Println()
-	fmt.Printf("  P12:  %s\n", config.P12Path)
-	fmt.Printf("  Cert: %s\n", config.CertPath)
-	fmt.Printf("  Key:  %s\n", config.KeyPath)
-	fmt.Println()
+	lipgloss.Println()
+	lipgloss.Println(cliHeading.Render("📜 Configured Certificate"))
+	lipgloss.Println()
+	for _, kv := range [][2]string{
+		{"P12", config.P12Path},
+		{"Cert", config.CertPath},
+		{"Key", config.KeyPath},
+	} {
+		lipgloss.Printf("  %s %s\n", cliName.Render(fmt.Sprintf("%-5s", kv[0])), cliDetail.Render(kv[1]))
+	}
+	lipgloss.Println()
 }
 
 func runCertRemoveCommand(certMgr *cert.Manager) {
@@ -695,125 +809,91 @@ Note: Group names must not conflict with service names.
 	fmt.Println(help)
 }
 
-const (
-	clrReset  = "\033[0m"
-	clrBold   = "\033[1m"
-	clrCyan   = "\033[36m"
-	clrGreen  = "\033[32m"
-	clrYellow = "\033[33m"
-	clrGray   = "\033[90m"
-)
-
-func clr(code, s string) string {
-	if os.Getenv("NO_COLOR") != "" {
-		return s
-	}
-	return code + s + clrReset
+// helpSection prints a blank line then a bold, uppercased section header marked
+// with an accent "▸" so the sections separate cleanly at a glance.
+func helpSection(title string) {
+	lipgloss.Println()
+	lipgloss.Println("  " + cliArrow.Render("▸") + " " + cliHeading.Render(strings.ToUpper(title)))
 }
 
-func helpHeader(s string) string { return clr(clrBold+clrYellow, s) }
+// helpRow prints one "name  description" command row with the name in a fixed
+// column so descriptions line up down the page.
+func helpRow(name, desc string) {
+	lipgloss.Printf("    %s  %s\n", cliName.Render(fmt.Sprintf("%-24s", name)), cliDetail.Render(desc))
+}
 
-func helpCmd(name, desc string) {
-	fmt.Printf("  %s  %s\n", clr(clrGreen, fmt.Sprintf("%-30s", name)), desc)
+// helpExample prints "pf <cmd>" with an optional trailing comment.
+func helpExample(cmd, note string) {
+	line := "    " + cliName.Render("pf ") + cliDetail.Render(cmd)
+	if note != "" {
+		line += "  " + cliMuted.Render("# "+note)
+	}
+	lipgloss.Println(line)
 }
 
 func showUsage() {
-	fmt.Println()
-	fmt.Println(clr(clrBold+clrCyan, "pf - Port Forward Manager"))
-	fmt.Println()
+	titleBox := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#33415A")).
+		Padding(0, 2).
+		Render(cliTitle.Render("⚡ pf") + cliMuted.Render("  ·  Port Forward Manager"))
 
-	fmt.Println(helpHeader("Usage:"))
-	fmt.Println("  pf <command> [arguments]")
-	fmt.Println()
+	lipgloss.Println()
+	lipgloss.Println(titleBox)
+	lipgloss.Println("  " + cliMuted.Render("Manage kubectl/ssh port-forwards with a live status TUI."))
 
-	fmt.Println(helpHeader("Commands:"))
-	helpCmd(`a, add <name> "<command>"`, "Add new service")
-	helpCmd("l, list", "List all services")
-	helpCmd("k, kubectl <args...>", "Run kubectl with configured certificate")
-	helpCmd("r, run <name1,name2,...>", "Run services with TUI")
-	helpCmd("ra, run all", "Run all services")
-	helpCmd("r, run <group-name>", "Run a group of services")
-	helpCmd("d, delete <name>", "Delete service")
-	helpCmd("rename <old> <new>", "Rename a service or group")
-	helpCmd("g, group <subcommand>", "Manage groups (add/add-service/remove-service/list/delete/rename)")
-	helpCmd("c, cleanup [--all]", "Free configured ports (--all kills all kubectl/ssh)")
-	helpCmd("cert <subcommand>", "Manage certificate (add/list/remove)")
-	helpCmd("edit", "Bulk-edit all services/groups in $EDITOR")
-	helpCmd("v, version", "Show build version details")
-	helpCmd("u, update [--yes|--force]", "Update pf to the latest GitHub release")
-	helpCmd("h, help", "Show this help")
-	fmt.Println()
+	helpSection("Usage")
+	helpRow("pf <command> [args]", "Run a command (see below)")
+	helpRow("pf <service|group>", "Shortcut: runs it directly, same as `pf run`")
 
-	fmt.Println(helpHeader("Examples:"))
-	for _, ex := range []string{
-		`pf add db "kubectl port-forward service/postgres 5432:5432"`,
-		"pf k get pods -n production",
-		"pf kubectl logs deploy/api -f",
-		"pf k exec -it pod/my-pod -- sh",
-		"pf run db,redis",
-		"pf run all",
-	} {
-		fmt.Println("  " + ex)
-	}
-	fmt.Println()
+	helpSection("Run")
+	helpRow("r, run <targets>", "Run services/groups in the live TUI (comma-separated)")
+	helpRow("ra, run all", "Run every configured service")
+	helpRow("<service|group>", "Bare name(s) run directly — no `run` needed")
 
-	fmt.Println(helpHeader("Group Management:"))
-	for _, ex := range []string{
-		"pf group add database auth,core,crm",
-		"pf group add-service database wallet-pg,redis",
-		"pf group remove-service database redis",
-		"pf group list",
-		"pf group rename database db-group",
-		"pf run database",
-	} {
-		fmt.Println("  " + ex)
-	}
-	fmt.Println()
+	helpSection("Services")
+	helpRow(`a, add <name> "<cmd>"`, "Add a service")
+	helpRow("l, list", "List all services")
+	helpRow("d, delete <name>", "Delete a service")
+	helpRow("rename <old> <new>", "Rename a service or group")
 
-	fmt.Println(helpHeader("Certificate Management:"))
-	helpCmd("pf cert add <p12-file>", "Add certificate (used for all kubectl services)")
-	helpCmd("pf cert list", "Show configured certificate")
-	helpCmd("pf cert remove", "Remove certificate")
-	fmt.Println()
+	helpSection("Groups")
+	helpRow("g, group <subcommand>", "add · add-service · remove-service · list · delete · rename")
 
-	fmt.Println(helpHeader("Kubectl Passthrough:"))
-	helpCmd("pf k <kubectl-args...>", "Run any kubectl command with auto cert injection")
-	helpCmd("pf kubectl <args...>", "Same as pf k")
-	fmt.Println()
+	helpSection("Certificate")
+	helpRow("cert <subcommand>", "add · list · remove  (auto-injected into every kubectl call)")
+	helpRow("k, kubectl <args>", "Run kubectl with the configured certificate")
 
-	fmt.Println(helpHeader("Features:"))
-	for _, f := range []string{
-		"Simple TUI with real-time status",
-		"Auto-reconnect on failure",
-		"Certificate support (P12) for secure kubectl connections",
-		"Group services for easier management",
-		"Run all services at once",
-		"Clean shutdown on quit",
-	} {
-		fmt.Println("  " + clr(clrCyan, "•") + " " + f)
-	}
-	fmt.Println()
+	helpSection("Tools")
+	helpRow("edit", "Bulk-edit services & groups in $EDITOR")
+	helpRow("icon [on|off|status]", "Toggle Nerd Font icons (needs a Nerd Font)")
+	helpRow("c, cleanup [--all]", "Free configured ports (--all kills all kubectl/ssh)")
+	helpRow("u, update [--force]", "Update pf to the latest GitHub release")
+	helpRow("v, version", "Show build version details")
+	helpRow("h, help", "Show this help")
 
-	fmt.Println(helpHeader("Source:"))
-	fmt.Println("  " + clr(clrGray, "https://github.com/alinemone/go-port-forward"))
-	fmt.Println()
+	helpSection("Examples")
+	helpExample("db,redis", "run two services")
+	helpExample("backend", "run a group")
+	helpExample(`add db "kubectl port-forward service/postgres 5432:5432"`, "")
+	helpExample("group add backend auth,core,crm", "")
+	helpExample("k get pods -n production", "")
+
+	lipgloss.Println()
+	lipgloss.Println("  " + cliBorder.Render("https://github.com/alinemone/go-port-forward"))
+	lipgloss.Println()
 }
 
 func runEditCommand() {
 	st := storage.NewStorage()
 
-	services, err := st.LoadServices()
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		os.Exit(1)
-	}
-	groups, err := st.ListGroups()
+	data, err := st.LoadData()
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		os.Exit(1)
 	}
 
-	seed, err := json.MarshalIndent(&storage.StorageData{Services: services, Groups: groups}, "", "  ")
+	seed, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		os.Exit(1)

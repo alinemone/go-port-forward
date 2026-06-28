@@ -42,6 +42,31 @@ func (f *fakeRunTargetStore) GetGroupServices(name string) ([]string, error) {
 	return services, nil
 }
 
+func TestLooksLikeRunTarget(t *testing.T) {
+	st := &fakeRunTargetStore{
+		services: map[string]string{"db": "cmd", "redis": "cmd"},
+		groups:   map[string][]string{"backend": {"db"}},
+	}
+
+	cases := []struct {
+		input string
+		want  bool
+	}{
+		{"db", true},          // a service
+		{"backend", true},     // a group
+		{"db,redis", true},    // comma list, first is a service
+		{"redis api", true},   // space list, first is a service
+		{"nope", false},       // unknown → not a run target
+		{"", false},           // empty
+		{"unknown,db", false}, // first token unknown → treat as unknown command
+	}
+	for _, c := range cases {
+		if got := looksLikeRunTarget(st, c.input); got != c.want {
+			t.Errorf("looksLikeRunTarget(%q) = %v, want %v", c.input, got, c.want)
+		}
+	}
+}
+
 func TestResolveRunTargetsSingleService(t *testing.T) {
 	st := &fakeRunTargetStore{
 		services: map[string]string{"db": "cmd"},

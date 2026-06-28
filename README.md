@@ -268,6 +268,62 @@ pf edit
 Great for the initial setup when adding many services at once. The file is
 validated on save; invalid JSON is rejected and you are offered to reopen and fix it.
 
+### Optional Service Icons
+
+> **Requires a [Nerd Font](https://www.nerdfonts.com).** The icons are special glyphs
+> that only render with a Nerd Font set as your terminal font. Without one they show as
+> blank/□ boxes — which is exactly why icons are **disabled by default**. Enable them only
+> after switching your terminal to a Nerd Font.
+
+Once your terminal uses a Nerd Font, turn icons on with the CLI:
+
+```bash
+pf icon on       # enable colored icons before service names
+pf icon off      # disable them
+pf icon          # show current status (also: pf icon status)
+```
+
+This flips `icon.enable` in `~/.pf/services.json`. You can also set it by hand:
+
+```json
+{
+  "icon": { "enable": true },
+  "services": {
+    "db": "kubectl port-forward service/postgres 15432:5432",
+    "redis": "kubectl port-forward service/redis 6379:6379"
+  },
+  "groups": {}
+}
+```
+
+Icons are selected from the main/original port, which is the remote/right-hand side of
+`local:remote` (`5432` in `15432:5432`). Unknown ports use a default service icon.
+Use a Nerd Font-compatible terminal font so the glyphs render correctly. The same icons
+also appear in the add/edit list opened with `a` (services by port, groups with a folder
+icon).
+
+#### Customizing icons
+
+Don't recognize a port, or want a different look? Override glyph and/or color per port,
+and restyle the group icon, under `icon`:
+
+```json
+{
+  "icon": {
+    "enable": true,
+    "ports": {
+      "8500": { "glyph": "", "color": "#CA2171" },
+      "5432": { "color": "#4FC3F7" }
+    },
+    "group": { "glyph": "", "color": "#73FFB6" }
+  }
+}
+```
+
+Each override is merged onto the built-in: set both `glyph` and `color` to fully replace
+an icon (or add one for a port the built-ins don't cover), or set just `color` to recolor
+a built-in glyph. Paste glyphs from a [Nerd Font](https://www.nerdfonts.com/cheat-sheet).
+
 ### Cleanup Stuck Ports
 
 ```bash

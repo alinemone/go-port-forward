@@ -18,6 +18,10 @@ type Service struct {
 	Name         string
 	Command      string
 	LocalPort    string
+	MainPort     string
+	IconEnabled  bool
+	IconGlyph    string
+	IconColor    string
 	Status       string
 	LastError    string
 	StartTime    time.Time

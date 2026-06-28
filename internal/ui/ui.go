@@ -17,6 +17,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/alinemone/go-port-forward/internal/configedit"
+	"github.com/alinemone/go-port-forward/internal/icons"
 	"github.com/alinemone/go-port-forward/internal/manager"
 	"github.com/alinemone/go-port-forward/internal/model"
 	"github.com/alinemone/go-port-forward/internal/storage"
@@ -75,6 +76,16 @@ func (r manageRow) selectable() bool {
 	return r.kind == rowGroup || r.kind == rowService
 }
 
+// overlayIcons holds the resolved icon state for the add/edit overlay: the
+// resolver (built-ins + user config overrides), whether icons are drawn, and
+// each service's main port. Loaded once when the overlay opens rather than per
+// render, and grouped here so the icon feature stays cohesive and easy to grow.
+type overlayIcons struct {
+	set     *icons.Set
+	enabled bool
+	ports   map[string]string // service name → main port
+}
+
 type Controller interface {
 	ListServiceStates() []model.Service
 	StartStoredService(ctx context.Context, name string) error
@@ -118,6 +129,7 @@ type UI struct {
 	manageGroups        map[string][]string
 	manageGroupNames    []string
 	manageServices      []string
+	manageIcons         overlayIcons // resolved icon state for the overlay list
 	manageSelGroups     map[string]bool
 	manageSelSvcs       map[string]bool
 	manageConfirmDelete string
@@ -340,10 +352,12 @@ func spinnerTick() tea.Cmd {
 
 func (u *UI) launchEditor() tea.Cmd {
 	st := storage.NewStorage()
-	services, _ := st.LoadServices()
-	groups, _ := st.ListGroups()
+	data, err := st.LoadData()
+	if err != nil {
+		return func() tea.Msg { return editResultMsg{err: err} }
+	}
 
-	seed, err := json.MarshalIndent(&storage.StorageData{Services: services, Groups: groups}, "", "  ")
+	seed, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
 		return func() tea.Msg { return editResultMsg{err: err} }
 	}
@@ -485,6 +499,7 @@ func (u *UI) exitManageMode() {
 	u.manageGroups = nil
 	u.manageGroupNames = nil
 	u.manageServices = nil
+	u.manageIcons = overlayIcons{}
 	u.manageSelGroups = nil
 	u.manageSelSvcs = nil
 	u.manageCursor = 0
@@ -513,9 +528,28 @@ func (u *UI) buildManageRows() {
 		svcNames = nil
 	}
 
+	// Resolve icons for the overlay: the icon set (built-ins + user overrides),
+	// whether icons are enabled, and each service's main port. Loaded here, on
+	// demand, rather than per-render so list drawing stays allocation-light.
+	iconSet, iconsEnabled, err := st.IconSet()
+	if err != nil {
+		iconSet, iconsEnabled = icons.NewSet(nil, nil), false
+	}
+	commands, err := st.LoadServices()
+	if err != nil {
+		commands = nil
+	}
+	ports := make(map[string]string, len(commands))
+	for name, command := range commands {
+		if _, main := storage.ParsePortsFromCommand(command); main != "" {
+			ports[name] = main
+		}
+	}
+
 	u.manageGroups = groups
 	u.manageGroupNames = groupNames
 	u.manageServices = svcNames
+	u.manageIcons = overlayIcons{set: iconSet, enabled: iconsEnabled, ports: ports}
 
 	if u.manageSelGroups != nil {
 		valid := make(map[string]bool, len(groupNames))
@@ -579,12 +613,12 @@ func (u *UI) rebuildManageRows() {
 	}
 	u.manageRows = rows
 	u.manageOffset = 0
-	u.clampManageCursor(1)
+	u.clampManageCursor()
 }
 
 // clampManageCursor snaps the cursor onto the nearest selectable row, searching
 // forward first then backward. Used after refresh/delete shifts rows.
-func (u *UI) clampManageCursor(int) {
+func (u *UI) clampManageCursor() {
 	n := len(u.manageRows)
 	if n == 0 {
 		u.manageCursor = 0
@@ -654,7 +688,7 @@ func (u *UI) focusManage(kind manageRowKind, name string) {
 			return
 		}
 	}
-	u.clampManageCursor(1)
+	u.clampManageCursor()
 }
 
 func (u *UI) currentManageRow() manageRow {
@@ -662,20 +696,6 @@ func (u *UI) currentManageRow() manageRow {
 		return manageRow{}
 	}
 	return u.manageRows[u.manageCursor]
-}
-
-// cursorSectionIsGroups reports whether the cursor is within the GROUPS section
-// (drives context-aware 'n' = new group vs new service).
-func (u *UI) cursorSectionIsGroups() bool {
-	for i := u.manageCursor; i >= 0 && i < len(u.manageRows); i-- {
-		switch u.manageRows[i].kind {
-		case rowHeaderGroups:
-			return true
-		case rowHeaderServices:
-			return false
-		}
-	}
-	return true
 }
 
 func (u *UI) runningNameSet() map[string]bool {
@@ -1356,6 +1376,17 @@ func renderServiceTable(services []model.Service, selectedIndex, offset, maxVisi
 	}
 
 	compact := width < 90
+	showIcons := false
+	for i := start; i < end; i++ {
+		if services[i].IconEnabled {
+			showIcons = true
+			break
+		}
+	}
+	iconWidth := 0
+	if showIcons {
+		iconWidth = 2
+	}
 	statusWidth := 12
 	uptimeWidth := 8
 	portWidth := 6
@@ -1377,7 +1408,7 @@ func renderServiceTable(services []model.Service, selectedIndex, offset, maxVisi
 	}
 	if compact {
 		minName := 8
-		fixed := statusWidth + portWidth + 6
+		fixed := statusWidth + portWidth + iconWidth + 6
 		nameWidth := available - fixed
 		if nameWidth < minName {
 			nameWidth = minName
@@ -1388,7 +1419,7 @@ func renderServiceTable(services []model.Service, selectedIndex, offset, maxVisi
 		maxNameLen = nameWidth
 	} else {
 		minName := 10
-		fixed := statusWidth + uptimeWidth + portWidth + restartWidth + 10
+		fixed := statusWidth + uptimeWidth + portWidth + restartWidth + iconWidth + 10
 		nameWidth := available - fixed
 		if nameWidth < minName {
 			nameWidth = minName
@@ -1401,9 +1432,9 @@ func renderServiceTable(services []model.Service, selectedIndex, offset, maxVisi
 
 	rows := make([]string, 0, len(services)+2)
 	headerPrefix := "  "
-	headerLine := headerPrefix + fmt.Sprintf(
-		"%-*s  %-*s",
-		maxNameLen, "SERVICE",
+	nameCellWidth := maxNameLen + iconWidth
+	headerLine := headerPrefix + padRightDisplayWidth("SERVICE", nameCellWidth) + fmt.Sprintf(
+		"  %-*s",
 		statusWidth, "STATUS",
 	)
 	if compact {
@@ -1459,11 +1490,6 @@ func renderServiceTable(services []model.Service, selectedIndex, offset, maxVisi
 
 		uptime := formatUptime(svc.StartTime)
 
-		displayName := svc.Name
-		if len(displayName) > maxNameLen {
-			displayName = displayName[:maxNameLen-3] + "..."
-		}
-		name := fmt.Sprintf("%-*s", maxNameLen, displayName)
 		status := fmt.Sprintf("%s %-*s", statusIcon, statusWidth-2, statusText)
 		uptimeStr := fmt.Sprintf("%-*s", uptimeWidth, uptime)
 		portStr := fmt.Sprintf("%-*s", portWidth, svc.LocalPort)
@@ -1473,10 +1499,20 @@ func renderServiceTable(services []model.Service, selectedIndex, offset, maxVisi
 		if selected {
 			nameColor = colorAccent
 		}
+		displayName := truncateRunes(svc.Name, maxNameLen)
+		nameText := padRightDisplayWidth(displayName, maxNameLen)
 		styledName := lipgloss.NewStyle().
 			Foreground(nameColor).
 			Bold(true).
-			Render(name)
+			Render(nameText)
+		if showIcons {
+			cell := "  "
+			if svc.IconEnabled {
+				icon := serviceIcon(svc)
+				cell = renderIconCell(icon.Glyph, icon.Color)
+			}
+			styledName = padRightDisplayWidth(cell+styledName, nameCellWidth)
+		}
 
 		styledStatus := lipgloss.NewStyle().
 			Foreground(statusColor).
@@ -1735,6 +1771,36 @@ func padRightRunes(text string, width int) string {
 	return text + strings.Repeat(" ", width-len(runes))
 }
 
+func padRightDisplayWidth(text string, width int) string {
+	textWidth := lipgloss.Width(text)
+	if textWidth >= width {
+		return text
+	}
+	return text + strings.Repeat(" ", width-textWidth)
+}
+
+// serviceIcon returns the icon for a running service. It prefers the glyph the
+// manager already resolved (which honors the user's config overrides) and falls
+// back to the built-in port mapping when none was carried — e.g. in tests that
+// construct a Service from just a port.
+func serviceIcon(svc *model.Service) icons.Icon {
+	if svc.IconGlyph != "" {
+		return icons.Icon{Glyph: svc.IconGlyph, Color: svc.IconColor}
+	}
+	return icons.ForPort(svc.MainPort)
+}
+
+// renderIconCell renders a fixed two-column icon cell from an already-resolved
+// glyph/color. An empty glyph yields two blank columns so name columns stay
+// aligned whether or not a row carries an icon.
+func renderIconCell(glyph, colorHex string) string {
+	if glyph == "" {
+		return "  "
+	}
+	styled := lipgloss.NewStyle().Foreground(lipgloss.Color(colorHex)).Render(glyph)
+	return padRightDisplayWidth(styled+" ", 2)
+}
+
 func (u *UI) manageVisibleRows() int {
 	if u.height <= 0 {
 		return 30
@@ -1774,21 +1840,14 @@ func (u *UI) renderManageGroupRow(name string, cursorOn bool, maxNameLen int, ru
 	if cursorOn {
 		highlight = lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("► ")
 	}
-	checkbox := "[ ]"
-	if u.manageSelGroups[name] {
-		checkbox = "[✓]"
-	}
-	box := lipgloss.NewStyle().Foreground(colorMuted).Render(checkbox)
+	box := u.renderSelectCheckbox(u.manageSelGroups[name])
 
-	displayName := name
-	if len(displayName) > maxNameLen {
-		displayName = displayName[:maxNameLen-3] + "..."
-	}
 	nameColor := colorText
 	if cursorOn {
 		nameColor = colorAccent
 	}
-	styledName := lipgloss.NewStyle().Foreground(nameColor).Bold(true).Render(fmt.Sprintf("%-*s", maxNameLen, displayName))
+	styledName := lipgloss.NewStyle().Foreground(nameColor).Bold(true).
+		Render(padRightDisplayWidth(truncateRunes(name, maxNameLen), maxNameLen))
 
 	members := u.manageGroups[name]
 	run := 0
@@ -1800,7 +1859,9 @@ func (u *UI) renderManageGroupRow(name string, cursorOn bool, maxNameLen int, ru
 	info := lipgloss.NewStyle().Foreground(colorMuted).
 		Render(fmt.Sprintf("%s  %d/%d running", summarizeMembers(members), run, len(members)))
 
-	return highlight + box + " " + styledName + "  " + info
+	icon := u.overlayIconCell(u.manageIcons.set.ForGroup())
+
+	return highlight + box + " " + icon + styledName + "  " + info
 }
 
 func (u *UI) renderManageServiceRow(name string, cursorOn bool, maxNameLen int, running map[string]bool) string {
@@ -1809,30 +1870,43 @@ func (u *UI) renderManageServiceRow(name string, cursorOn bool, maxNameLen int, 
 		highlight = lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("► ")
 	}
 
-	displayName := name
-	if len(displayName) > maxNameLen {
-		displayName = displayName[:maxNameLen-3] + "..."
-	}
 	nameColor := colorText
 	if cursorOn {
 		nameColor = colorAccent
 	}
-	styledName := lipgloss.NewStyle().Foreground(nameColor).Bold(true).Render(fmt.Sprintf("%-*s", maxNameLen, displayName))
+	styledName := lipgloss.NewStyle().Foreground(nameColor).Bold(true).
+		Render(padRightDisplayWidth(truncateRunes(name, maxNameLen), maxNameLen))
 
 	var box, indicator string
 	if running[name] {
 		box = lipgloss.NewStyle().Foreground(colorMuted).Render("   ")
 		indicator = lipgloss.NewStyle().Foreground(colorAccentAlt).Render("● running")
 	} else {
-		checkbox := "[ ]"
-		if u.manageSelSvcs[name] {
-			checkbox = "[✓]"
-		}
-		box = lipgloss.NewStyle().Foreground(colorMuted).Render(checkbox)
+		box = u.renderSelectCheckbox(u.manageSelSvcs[name])
 		indicator = lipgloss.NewStyle().Foreground(colorMuted).Render("○ stopped")
 	}
 
-	return highlight + box + " " + styledName + "  " + indicator
+	icon := u.overlayIconCell(u.manageIcons.set.ForPort(u.manageIcons.ports[name]))
+
+	return highlight + box + " " + icon + styledName + "  " + indicator
+}
+
+// renderSelectCheckbox draws a multi-select checkbox, brightening to the accent
+// color when ticked so selected rows read at a glance.
+func (u *UI) renderSelectCheckbox(selected bool) string {
+	if selected {
+		return lipgloss.NewStyle().Foreground(colorAccentAlt).Bold(true).Render("[✓]")
+	}
+	return lipgloss.NewStyle().Foreground(colorMuted).Render("[ ]")
+}
+
+// overlayIconCell renders the leading icon cell for an overlay row from an
+// already-resolved icon, or an empty string when icons are disabled.
+func (u *UI) overlayIconCell(icon icons.Icon) string {
+	if !u.manageIcons.enabled {
+		return ""
+	}
+	return renderIconCell(icon.Glyph, icon.Color)
 }
 
 func (u *UI) renderManageOverlay() string {

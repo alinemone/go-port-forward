@@ -17,6 +17,22 @@ func TestValidateValid(t *testing.T) {
 	}
 }
 
+func TestValidateAcceptsIconConfig(t *testing.T) {
+	data := []byte(`{
+		"icon": {"enable": true},
+		"services": {"db": "kubectl port-forward svc/db 5432:5432"},
+		"groups": {"backend": ["db"]}
+	}`)
+
+	sd, err := Validate(data)
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if sd.Icon == nil || !sd.Icon.Enable {
+		t.Fatalf("expected enabled icon config, got %#v", sd.Icon)
+	}
+}
+
 func TestValidateEmptyIsOK(t *testing.T) {
 	sd, err := Validate([]byte(`{}`))
 	if err != nil {
@@ -34,6 +50,7 @@ func TestValidateRejects(t *testing.T) {
 		"dangerous command":   `{"services": {"x": "rm -rf /"}}`,
 		"unknown group ref":   `{"services": {}, "groups": {"g": ["ghost"]}}`,
 		"group/service clash": `{"services": {"db": "kubectl port-forward svc/db 5432:5432"}, "groups": {"db": ["db"]}}`,
+		"invalid icon type":   `{"icon": {"enable": "yes"}, "services": {}}`,
 	}
 
 	for name, payload := range cases {

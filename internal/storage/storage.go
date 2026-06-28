@@ -9,12 +9,30 @@ import (
 	"sort"
 	"time"
 
+	"github.com/alinemone/go-port-forward/internal/icons"
 	"github.com/alinemone/go-port-forward/internal/model"
 )
+
+// IconSpec is a user-supplied icon override read from config. Either field may
+// be empty, in which case the built-in value for that glyph/color is kept.
+type IconSpec struct {
+	Glyph string `json:"glyph,omitempty"`
+	Color string `json:"color,omitempty"`
+}
+
+// IconConfig controls the optional Nerd Font icons. Icons are OFF unless Enable
+// is true, because the glyphs require a font the user may not have installed.
+// Ports re-skins or adds icons by main port; Group overrides the group icon.
+type IconConfig struct {
+	Enable bool                `json:"enable"`
+	Ports  map[string]IconSpec `json:"ports,omitempty"`
+	Group  *IconSpec           `json:"group,omitempty"`
+}
 
 type StorageData struct {
 	Services map[string]string   `json:"services"`
 	Groups   map[string][]string `json:"groups"`
+	Icon     *IconConfig         `json:"icon,omitempty"`
 	Legacy   map[string]string   `json:"-"`
 }
 
@@ -77,6 +95,61 @@ func (s *Storage) SaveData(data *StorageData) error {
 	return s.writeStorage(data)
 }
 
+func (s *Storage) LoadData() (*StorageData, error) {
+	return s.readStorage()
+}
+
+func (s *Storage) IconEnabled() (bool, error) {
+	data, err := s.readStorage()
+	if err != nil {
+		return false, err
+	}
+	return data.Icon != nil && data.Icon.Enable, nil
+}
+
+// SetIconEnabled turns the optional Nerd Font icons on or off, preserving any
+// custom port/group overrides already in the config.
+func (s *Storage) SetIconEnabled(enabled bool) error {
+	data, err := s.readStorage()
+	if err != nil {
+		return err
+	}
+	if data.Icon == nil {
+		data.Icon = &IconConfig{}
+	}
+	data.Icon.Enable = enabled
+	return s.writeStorage(data)
+}
+
+// IconSet builds an icon resolver from the user's config and reports whether
+// icons are enabled. Icons stay OFF unless the user opts in (icon.enable=true),
+// because the Nerd Font glyphs render as blank boxes on terminals without the
+// font. A usable (non-nil) *Set is always returned, even on error.
+func (s *Storage) IconSet() (*icons.Set, bool, error) {
+	data, err := s.readStorage()
+	if err != nil {
+		return icons.NewSet(nil, nil), false, err
+	}
+	if data.Icon == nil {
+		return icons.NewSet(nil, nil), false, nil
+	}
+
+	var ports map[string]icons.Icon
+	if len(data.Icon.Ports) > 0 {
+		ports = make(map[string]icons.Icon, len(data.Icon.Ports))
+		for port, spec := range data.Icon.Ports {
+			ports[port] = icons.Icon{Glyph: spec.Glyph, Color: spec.Color}
+		}
+	}
+
+	var group *icons.Icon
+	if data.Icon.Group != nil {
+		group = &icons.Icon{Glyph: data.Icon.Group.Glyph, Color: data.Icon.Group.Color}
+	}
+
+	return icons.NewSet(ports, group), data.Icon.Enable, nil
+}
+
 func (s *Storage) EnsureExists() error {
 	if s.filePath == "" {
 		return nil
@@ -104,7 +177,10 @@ func (s *Storage) readStorage() (*StorageData, error) {
 	}
 
 	var storageData StorageData
-	if err := json.Unmarshal(data, &storageData); err == nil && storageData.Services != nil {
+	if err := json.Unmarshal(data, &storageData); err == nil && (storageData.Services != nil || storageData.Groups != nil || storageData.Icon != nil) {
+		if storageData.Services == nil {
+			storageData.Services = make(map[string]string)
+		}
 		if storageData.Groups == nil {
 			storageData.Groups = make(map[string][]string)
 		}

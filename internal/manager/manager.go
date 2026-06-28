@@ -26,6 +26,10 @@ type runningService struct {
 	name          string
 	command       string
 	localPort     string
+	mainPort      string
+	iconEnabled   bool
+	iconGlyph     string
+	iconColor     string
 	status        string
 	lastError     string
 	startTime     time.Time
@@ -66,6 +70,10 @@ func (s *runningService) snapshot() model.Service {
 		Name:         s.name,
 		Command:      s.command,
 		LocalPort:    s.localPort,
+		MainPort:     s.mainPort,
+		IconEnabled:  s.iconEnabled,
+		IconGlyph:    s.iconGlyph,
+		IconColor:    s.iconColor,
 		Status:       s.status,
 		LastError:    s.lastError,
 		StartTime:    s.startTime,
@@ -199,10 +207,18 @@ func (m *ServiceManager) StartService(ctx context.Context, name string) error {
 		return fmt.Errorf("invalid command for service '%s': %v", name, err)
 	}
 
-	localPort, _ := storage.ParsePortsFromCommand(command)
+	localPort, mainPort := storage.ParsePortsFromCommand(command)
 	if localPort == "" {
 		return fmt.Errorf("could not extract ports from command")
 	}
+	if mainPort == "" {
+		mainPort = localPort
+	}
+	iconSet, iconEnabled, err := m.storage.IconSet()
+	if err != nil {
+		return err
+	}
+	icon := iconSet.ForPort(mainPort)
 
 	svcCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
@@ -210,6 +226,10 @@ func (m *ServiceManager) StartService(ctx context.Context, name string) error {
 		name:         name,
 		command:      command,
 		localPort:    localPort,
+		mainPort:     mainPort,
+		iconEnabled:  iconEnabled,
+		iconGlyph:    icon.Glyph,
+		iconColor:    icon.Color,
 		status:       model.StatusConnecting,
 		startTime:    time.Now(),
 		restartCount: 0,
