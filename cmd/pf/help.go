@@ -5,13 +5,12 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
-
-	"github.com/alinemone/go-port-forward/internal/theme"
 )
 
 // helpSection prints a blank line then a bold, uppercased section header marked
 // with an accent "▸". An optional hint (e.g. "pf group <sub>") is shown dim so
-// the reader knows the prefix the rows below share.
+// the reader knows the prefix the rows below share. Used by the per-command
+// helps (pf group, pf cert, pf update, pf completion).
 func helpSection(title, hint string) {
 	lipgloss.Println()
 	line := "  " + cliArrow.Render("▸") + " " + cliHeading.Render(strings.ToUpper(title))
@@ -35,122 +34,88 @@ func helpExample(cmd, note string) {
 	lipgloss.Println(line)
 }
 
-// helpEg prints an indented "e.g. pf <cmd>" hint under a command row.
-func helpEg(cmd string) {
-	lipgloss.Println("        " + cliMuted.Render("e.g. ") + cliName.Render("pf ") + cliDetail.Render(cmd))
-}
-
-// helpStep prints a numbered quick-start step: "N. pf <cmd>   → <note>".
-func helpStep(n int, cmd, note string) {
-	num := cliArrow.Render(fmt.Sprintf("%d.", n))
-	body := cliName.Render("pf ") + cliDetail.Render(cmd)
-	pad := 54 - lipgloss.Width("pf "+cmd)
-	if pad < 2 {
-		pad = 2
-	}
-	lipgloss.Println("    " + num + " " + body + strings.Repeat(" ", pad) + cliMuted.Render("→ "+note))
-}
-
-// helpText prints an indented prose line in the normal text color.
-func helpText(s string) { lipgloss.Println("    " + cliDetail.Render(s)) }
-
 // helpNote prints a dim bullet line for tips/notes.
 func helpNote(text string) {
 	lipgloss.Println("    " + cliMuted.Render("• "+text))
 }
 
-// helpTitle renders the bordered banner shown at the top of the help.
-func helpTitle() string {
-	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color(theme.Active.Border)).
-		Padding(0, 2).
-		Render(cliTitle.Render("⚡ pf") + cliMuted.Render("  ·  Port Forward Manager"))
+// ── Main `pf help` screen ───────────────────────────────────────────────────
+//
+// showUsage is intentionally plain: only fmt with ASCII text — no colors,
+// Unicode symbols, or box drawing — so it renders identically on every terminal,
+// including legacy Windows consoles where styled output showed up as raw escape
+// codes or empty boxes. It is split into clear sections (services, groups,
+// certificate, kubectl); each command shows its shortcut inline (e.g. "a, add")
+// and every section carries a short example.
+
+// uHead prints a section header preceded by a blank line.
+func uHead(title string) {
+	fmt.Println()
+	fmt.Println(title)
+}
+
+// uRow prints a "  command   description" line, padding the command to width w
+// so the descriptions in a section line up.
+func uRow(w int, cmd, desc string) {
+	fmt.Printf("  %-*s  %s\n", w, cmd, desc)
+}
+
+// uExample prints an indented "Example:" block of "pf ..." lines.
+func uExample(lines ...string) {
+	fmt.Println("  Example:")
+	for _, l := range lines {
+		fmt.Println("    pf " + l)
+	}
 }
 
 func showUsage() {
-	lipgloss.Println()
-	lipgloss.Println(helpTitle())
-	lipgloss.Println("  " + cliMuted.Render("Forward remote ports (kubectl / ssh) to your computer and keep them alive."))
+	fmt.Println()
+	fmt.Println("pf - Port Forward Manager")
+	fmt.Println("Forward remote ports (kubectl / ssh) to your machine and keep them alive.")
 
-	helpSection("What it does", "")
-	helpText("A SERVICE is a port-forward command you save under a short name.")
-	helpText("Save it once, then start it by name — pf keeps it running and shows")
-	helpText("live status + logs, and auto-reconnects if it drops.")
-	helpText("A GROUP bundles several services so you can start them all at once.")
+	uHead("USAGE:")
+	fmt.Println("  pf <command> [arguments]")
+	uRow(26, "pf <name>", "Shortcut for: pf run <name>  (service or group)")
 
-	helpSection("Quick start", "your first 4 commands")
-	helpStep(1, `add db "kubectl port-forward service/postgres 5432:5432"`, "save a service named db")
-	helpStep(2, "list", "see everything you've saved")
-	helpStep(3, "db", "run it — opens the live view; press q to quit")
-	helpStep(4, "theme ocean", "optional: pick a color theme you like")
+	uHead("SERVICES:")
+	uRow(27, `a, add <name> "<command>"`, "Add a new service")
+	uRow(27, "l, list", "List all saved services")
+	uRow(27, "r, run <names>", "Run one or more services in the live view (comma-separated)")
+	uRow(27, "ra, run all", "Run every saved service")
+	uRow(27, "d, delete <name>", "Delete a service")
+	uRow(27, "rename <old> <new>", "Rename a service")
+	uExample(`add db "kubectl port-forward service/postgres 5432:5432"`, "run db,redis")
 
-	helpSection("Run services", "open the live view (TUI)")
-	helpRow("<name>", "Run one service by its name (shortcut for `run`)")
-	helpRow("<name1,name2,...>", "Run several services at once (comma-separated)")
-	helpRow("<group>", "Run every service in a group")
-	helpRow("r, run <targets>", "Same thing, written explicitly")
-	helpRow("ra, run all", "Run every service you've saved")
-	helpEg("db,redis")
-	helpEg("backend")
+	uHead("GROUPS:")
+	uRow(39, "g, group add <name> <svcs>", "Create a group from services")
+	uRow(39, "g, group add-service <name> <svcs>", "Add services to a group")
+	uRow(39, "g, group remove-service <name> <svcs>", "Remove services from a group")
+	uRow(39, "g, group list", "List all groups and their members")
+	uRow(39, "g, group rename <old> <new>", "Rename a group")
+	uRow(39, "g, group delete <name>", "Delete a group (services are kept)")
+	uExample("group add backend api,db,redis", "run backend")
 
-	helpSection("Manage services", "")
-	helpRow(`a, add <name> "<command>"`, "Save a new service (wrap the command in quotes)")
-	helpRow("l, list", "List saved services and their commands")
-	helpRow("d, delete <name>", "Delete a saved service")
-	helpRow("rename <old> <new>", "Rename a service (or a group)")
-	helpEg(`add api "kubectl port-forward svc/api 8080:80"`)
+	uHead("CERTIFICATE:")
+	uRow(22, "cert add <p12-file>", "Add a client certificate (used for all kubectl)")
+	uRow(22, "cert list", "Show the configured certificate")
+	uRow(22, "cert remove", "Remove the certificate")
+	uExample("cert add company-vpn.p12")
 
-	helpSection("Groups", "bundle services · pf group <sub>")
-	helpRow("add <name> <svcs>", "Create a group from comma-separated services")
-	helpRow("add-service <name> <svcs>", "Add services into an existing group")
-	helpRow("remove-service <name> <svcs>", "Remove services from a group")
-	helpRow("list", "List groups and their members")
-	helpRow("delete <name>", "Delete the group (the services are kept)")
-	helpRow("rename <old> <new>", "Rename a group")
-	helpEg("group add backend api,db,redis")
+	uHead("KUBECTL:")
+	uRow(22, "k, kubectl <args...>", "Run kubectl with the configured certificate")
+	uExample("k get pods -n production", "k logs deploy/api -f")
 
-	helpSection("Certificate & kubectl", "for secure clusters · pf cert <sub>")
-	helpRow("cert add <p12-file>", "Load a client cert; pf adds it to every kubectl call")
-	helpRow("cert list", "Show the loaded certificate")
-	helpRow("cert remove", "Forget the certificate")
-	helpRow("k, kubectl <args>", "Run any kubectl command with that cert applied")
-	helpEg("k get pods -n production")
+	uHead("OTHER:")
+	uRow(26, "c, cleanup [--all]", "Free configured ports (--all kills all kubectl/ssh)")
+	uRow(26, "edit", "Edit all services and groups as JSON")
+	uRow(26, "theme [name|list]", "Change the color theme")
+	uRow(26, "icon [on|off|status]", "Toggle service icons")
+	uRow(26, "completion install", "Install shell tab-completion")
+	uRow(26, "u, update [--yes|--force]", "Update pf to the latest release")
+	uRow(26, "v, version", "Show the installed version")
+	uRow(26, "h, help", "Show this help")
 
-	helpSection("Appearance", "")
-	helpRow("theme [name|list]", "Change colors: default · ocean · sunset")
-	helpRow("icon [on|off|status]", "Small app icons by services (needs a Nerd Font)")
-	helpEg("theme ocean")
-
-	helpSection("Maintenance", "")
-	helpRow("c, cleanup [--all]", "Free stuck ports (--all kills every kubectl/ssh)")
-	helpRow("edit", "Advanced: edit everything as JSON in your $EDITOR")
-	helpRow("completion install [shell]", "Set up Tab-completion (bash/zsh/fish/powershell)")
-	helpRow("u, update [--yes|--force]", "Update pf to the newest version")
-	helpRow("v, version", "Show the installed version")
-	helpRow("h, help", "Show this help")
-
-	helpSection("Shortcuts", "type less")
-	helpText("pf <name>  =  pf run <name>   (just type the service or group name)")
-	helpText("a=add   l=list   d=delete   r=run   ra=run all   g=group")
-	helpText("k=kubectl   c=cleanup   u=update   v=version   h=help")
-
-	helpSection("In the live view (TUI)", "keys")
-	helpRow("↑ ↓  (or j k)", "Move between services")
-	helpRow("a", "Add / edit services & groups")
-	helpRow("l", "Show logs for the selected service")
-	helpRow("r  ·  ^r", "Restart selected  ·  restart all")
-	helpRow("s", "Stop the selected service")
-	helpRow("q", "Quit (stops the running services)")
-
-	helpSection("Good to know", "")
-	helpNote("Ports are LOCAL:REMOTE — `5432:5432` maps the remote port to localhost:5432.")
-	helpNote("Run `pf group`, `pf cert` or `pf update` with no arguments for focused help.")
-	helpNote("Icons are off by default (need a Nerd Font) — turn on with `pf icon on`.")
-	helpNote("Your settings live in ~/.pf/services.json — `pf edit` opens it safely.")
-	helpNote("Tab-completion: run `pf completion install` once (bash/zsh/fish/powershell).")
-
-	lipgloss.Println()
-	lipgloss.Println("  " + cliBorder.Render("https://github.com/alinemone/go-port-forward"))
-	lipgloss.Println()
+	fmt.Println()
+	fmt.Println("https://github.com/alinemone/go-port-forward")
+	fmt.Println()
 }
