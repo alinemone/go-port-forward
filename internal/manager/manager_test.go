@@ -1,11 +1,136 @@
 package manager
 
 import (
+	"fmt"
+	"os"
+	"os/exec"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/alinemone/go-port-forward/internal/model"
 )
+
+// TestMain lets the test binary double as a tiny "arg printer": when
+// PF_ARGPRINT=1 it prints its arguments joined by "|" and exits. This is used by
+// TestNewShellCommandPreservesQuotedSpacedPath to observe exactly what arguments
+// a program receives after commandStr passes through the OS shell.
+func TestMain(m *testing.M) {
+	if os.Getenv("PF_ARGPRINT") == "1" {
+		fmt.Println(strings.Join(os.Args[1:], "|"))
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
+
+// TestNewShellCommandPreservesQuotedSpacedPath guards the fix for cert paths
+// under usernames containing spaces (e.g. C:\Users\ali mohammadi\...). A quoted
+// path in commandStr must reach the target program as one clean argument with no
+// literal quote characters.
+func TestNewShellCommandPreservesQuotedSpacedPath(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+
+	prog := self
+	if strings.Contains(prog, " ") {
+		prog = `"` + prog + `"`
+	}
+
+	spacedPath := `C:\Users\ali mohammadi\.pf\certs\client-cert.pem`
+	commandStr := fmt.Sprintf(`%s --client-certificate="%s" end`, prog, spacedPath)
+
+	cmd := newShellCommand(commandStr)
+	cmd.Env = append(os.Environ(), "PF_ARGPRINT=1")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("run failed: %v (output: %q)", err, out)
+	}
+
+	got := strings.TrimRight(string(out), "\r\n")
+	want := "--client-certificate=" + spacedPath + "|end"
+	if got != want {
+		t.Errorf("target received wrong args:\n got  %q\n want %q", got, want)
+	}
+}
+
+// TestStopAllServicesDoesNotWait guards that bulk shutdown never blocks on a
+// service's graceful-exit channel: it cancels + force-kills and returns. Here
+// the services have no live process and a done channel that never closes, so a
+// correct implementation must still return effectively immediately.
+func TestStopAllServicesDoesNotWait(t *testing.T) {
+	const n = 8
+	m := &ServiceManager{services: make(map[string]*runningService)}
+	cancelled := make([]bool, n)
+	for i := 0; i < n; i++ {
+		i := i
+		m.services[fmt.Sprintf("svc%d", i)] = &runningService{
+			name:   fmt.Sprintf("svc%d", i),
+			cancel: func() { cancelled[i] = true },
+			done:   make(chan struct{}), // never closed
+			// process is nil -> killProcessTrees is a no-op
+		}
+	}
+
+	svcs := make([]*runningService, 0, n)
+	for _, s := range m.services {
+		svcs = append(svcs, s)
+	}
+
+	start := time.Now()
+	m.StopAllServices()
+	elapsed := time.Since(start)
+
+	if elapsed > 500*time.Millisecond {
+		t.Errorf("StopAllServices blocked for %v; it must not wait on done", elapsed)
+	}
+	for i := range cancelled {
+		if !cancelled[i] {
+			t.Errorf("service %d was not cancelled", i)
+		}
+	}
+	for _, s := range svcs {
+		if !s.bulkKill.Load() {
+			t.Errorf("service %q not marked for bulk kill", s.name)
+		}
+	}
+}
+
+// TestKillProcessTreesTerminatesAll spawns several real shell processes and
+// verifies the batched kill terminates every one of them.
+func TestKillProcessTreesTerminatesAll(t *testing.T) {
+	sleepCmd := "sleep 60"
+	if runtime.GOOS == "windows" {
+		sleepCmd = "ping -n 60 127.0.0.1 >NUL"
+	}
+
+	const n = 3
+	cmds := make([]*exec.Cmd, n)
+	procs := make([]*os.Process, n)
+	for i := 0; i < n; i++ {
+		c := newShellCommand(sleepCmd)
+		if err := c.Start(); err != nil {
+			t.Fatalf("start %d: %v", i, err)
+		}
+		cmds[i] = c
+		procs[i] = c.Process
+	}
+
+	killProcessTrees(procs)
+
+	for i, c := range cmds {
+		waited := make(chan struct{})
+		go func(c *exec.Cmd) { c.Wait(); close(waited) }(c)
+		select {
+		case <-waited:
+		case <-time.After(5 * time.Second):
+			c.Process.Kill()
+			t.Errorf("process %d was not terminated by killProcessTrees", i)
+		}
+	}
+}
 
 func TestClassifyOutputLine(t *testing.T) {
 	tests := []struct {

@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/alinemone/go-port-forward/internal/cert"
@@ -42,6 +43,11 @@ type runningService struct {
 	done          chan struct{}
 	process       *os.Process
 	mu            sync.RWMutex
+
+	// bulkKill is set before cancelling during StopAllServices so the per-run
+	// ctx.Done watcher skips its own taskkill — the whole fleet is killed in one
+	// batched call instead of one spawn per service.
+	bulkKill atomic.Bool
 }
 
 func (s *runningService) markHealthy() {
@@ -308,13 +314,7 @@ func (m *ServiceManager) runServiceOnce(ctx context.Context, svc *runningService
 		}
 	}
 
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		cmd = exec.Command("cmd", "/C", commandStr)
-	} else {
-		cmd = exec.Command("sh", "-c", commandStr)
-	}
-	cmd.SysProcAttr = newProcessGroupAttr()
+	cmd := newShellCommand(commandStr)
 
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
@@ -347,6 +347,11 @@ func (m *ServiceManager) runServiceOnce(ctx context.Context, svc *runningService
 
 	go func() {
 		<-ctx.Done()
+		// During a bulk shutdown, StopAllServices force-kills every process tree
+		// in one batched call, so skip the per-service kill here.
+		if svc.bulkKill.Load() {
+			return
+		}
 		killProcessTree(cmd.Process)
 	}()
 
@@ -427,6 +432,28 @@ func waitForPortRelease(port string, timeout time.Duration) {
 	}
 }
 
+// shutdownGraceTimeout is how long a cancelled service is given to exit on its
+// own before its process tree is force-killed. It's a var so tests can shrink it.
+var shutdownGraceTimeout = 5 * time.Second
+
+// awaitStopOrKill waits for a cancelled service's loop to finish on its own
+// (svc.done closes once the process has exited), and force-kills the process
+// tree if it doesn't within the grace period. The caller must have already
+// invoked svc.cancel().
+func awaitStopOrKill(svc *runningService) {
+	if svc.done == nil {
+		return
+	}
+	select {
+	case <-svc.done:
+	case <-time.After(shutdownGraceTimeout):
+		svc.mu.RLock()
+		proc := svc.process
+		svc.mu.RUnlock()
+		killProcessTree(proc)
+	}
+}
+
 func (m *ServiceManager) StopService(name string) {
 	m.mu.Lock()
 	svc, exists := m.services[name]
@@ -441,16 +468,7 @@ func (m *ServiceManager) StopService(name string) {
 		svc.cancel()
 	}
 
-	if svc.done != nil {
-		select {
-		case <-svc.done:
-		case <-time.After(5 * time.Second):
-			svc.mu.RLock()
-			proc := svc.process
-			svc.mu.RUnlock()
-			killProcessTree(proc)
-		}
-	}
+	awaitStopOrKill(svc)
 }
 
 func (m *ServiceManager) restartInPlace(ctx context.Context, name string) {
@@ -535,11 +553,17 @@ func (m *ServiceManager) StartStoredService(ctx context.Context, name string) er
 	return m.StartService(ctx, name)
 }
 
+// StopAllServices tears down every running service as fast as possible. It marks
+// each service for bulk kill and cancels it (so the loops stop and their own
+// ctx.Done watchers stand down), then force-kills all their process trees in a
+// single batched call. On Windows that means one taskkill spawn for the whole
+// fleet instead of one per service; on Unix each kill is a direct syscall.
 func (m *ServiceManager) StopAllServices() {
 	m.mu.Lock()
 	services := make([]*runningService, 0, len(m.services))
 	for _, svc := range m.services {
 		services = append(services, svc)
+		svc.bulkKill.Store(true)
 		if svc.cancel != nil {
 			svc.cancel()
 		}
@@ -547,18 +571,17 @@ func (m *ServiceManager) StopAllServices() {
 	m.services = make(map[string]*runningService)
 	m.mu.Unlock()
 
+	procs := make([]*os.Process, 0, len(services))
 	for _, svc := range services {
-		if svc.done != nil {
-			select {
-			case <-svc.done:
-			case <-time.After(5 * time.Second):
-				svc.mu.RLock()
-				proc := svc.process
-				svc.mu.RUnlock()
-				killProcessTree(proc)
-			}
+		svc.mu.RLock()
+		proc := svc.process
+		svc.mu.RUnlock()
+		if proc != nil {
+			procs = append(procs, proc)
 		}
 	}
+
+	killProcessTrees(procs)
 }
 
 func (m *ServiceManager) ListServiceStates() []model.Service {
