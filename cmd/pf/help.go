@@ -2,51 +2,18 @@ package main
 
 import (
 	"fmt"
-	"strings"
-
-	"charm.land/lipgloss/v2"
 )
 
-// helpSection prints a blank line then a bold, uppercased section header marked
-// with an accent "▸". An optional hint (e.g. "pf group <sub>") is shown dim so
-// the reader knows the prefix the rows below share. Used by the per-command
-// helps (pf group, pf cert, pf update, pf completion).
-func helpSection(title, hint string) {
-	lipgloss.Println()
-	line := "  " + cliArrow.Render("▸") + " " + cliHeading.Render(strings.ToUpper(title))
-	if hint != "" {
-		line += "  " + cliMuted.Render(hint)
-	}
-	lipgloss.Println(line)
-}
-
-// helpRow prints one aligned "name  description" row so descriptions line up.
-func helpRow(name, desc string) {
-	lipgloss.Printf("    %s  %s\n", cliName.Render(fmt.Sprintf("%-28s", name)), cliDetail.Render(desc))
-}
-
-// helpExample prints "pf <cmd>" with an optional trailing comment.
-func helpExample(cmd, note string) {
-	line := "    " + cliName.Render("pf ") + cliDetail.Render(cmd)
-	if note != "" {
-		line += "  " + cliMuted.Render("# "+note)
-	}
-	lipgloss.Println(line)
-}
-
-// helpNote prints a dim bullet line for tips/notes.
-func helpNote(text string) {
-	lipgloss.Println("    " + cliMuted.Render("• "+text))
-}
-
-// ── Main `pf help` screen ───────────────────────────────────────────────────
+// ── Help screens ────────────────────────────────────────────────────────────
 //
-// showUsage is intentionally plain: only fmt with ASCII text — no colors,
-// Unicode symbols, or box drawing — so it renders identically on every terminal,
-// including legacy Windows consoles where styled output showed up as raw escape
-// codes or empty boxes. It is split into clear sections (services, groups,
-// certificate, kubectl); each command shows its shortcut inline (e.g. "a, add")
-// and every section carries a short example.
+// All help output — the main `pf help` and every per-command help (pf group,
+// pf cert, pf update, pf completion) — is intentionally plain: only fmt with
+// ASCII text, no colors, Unicode symbols, or box drawing, so it renders
+// identically on every terminal, including legacy Windows consoles where styled
+// output showed up as raw escape codes or empty boxes. Each command shows its
+// shortcut inline (e.g. "a, add") and every section carries a short example.
+//
+// The uHead / uRow / uExample helpers below are shared by all of these screens.
 
 // uHead prints a section header preceded by a blank line.
 func uHead(title string) {

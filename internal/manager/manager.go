@@ -380,7 +380,7 @@ func addKubectlCertFlags(command, certPath, keyPath string) string {
 		return command
 	}
 
-	certFlags := fmt.Sprintf("--client-certificate=%s --client-key=%s ", certPath, keyPath)
+	certFlags := fmt.Sprintf(`--client-certificate="%s" --client-key="%s" `, certPath, keyPath)
 	parts := strings.Split(command, "kubectl ")
 	if len(parts) < 2 {
 		return command

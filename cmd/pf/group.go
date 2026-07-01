@@ -158,24 +158,24 @@ func runGroupDeleteCommand(st *storage.Storage, args []string) {
 }
 
 func showGroupUsage() {
-	helpSection("Group Management", "pf group <sub>")
-	helpRow("add <name> <svcs>", "Create a group from comma-separated services")
-	helpRow("add-service <name> <svcs>", "Add services to an existing group")
-	helpRow("remove-service <name> <svcs>", "Remove services from a group")
-	helpRow("list", "List all groups and their members")
-	helpRow("delete <name>", "Delete a group (member services are kept)")
-	helpRow("rename <old> <new>", "Rename a group")
+	uHead("GROUPS:")
+	uRow(34, "group add <name> <svcs>", "Create a group from comma-separated services")
+	uRow(34, "group add-service <name> <svcs>", "Add services to an existing group")
+	uRow(34, "group remove-service <name> <svcs>", "Remove services from a group")
+	uRow(34, "group list", "List all groups and their members")
+	uRow(34, "group delete <name>", "Delete a group (member services are kept)")
+	uRow(34, "group rename <old> <new>", "Rename a group")
+	uExample(
+		"group add database auth,core,crm",
+		"group add-service database wallet-pg,redis",
+		"group remove-service database redis",
+		"group rename database db-group",
+		"run database",
+		"run database,cache",
+		"run database,db",
+	)
 
-	helpSection("Examples", "")
-	helpExample("group add database auth,core,crm", "")
-	helpExample("group add-service database wallet-pg,redis", "")
-	helpExample("group remove-service database redis", "")
-	helpExample("group rename database db-group", "")
-	helpExample("run database", "run every service in the group")
-	helpExample("run database,cache", "run multiple groups")
-	helpExample("run database,db", "mix a group and a service")
-
-	helpSection("Note", "")
-	helpNote("Group names must not conflict with service names.")
-	lipgloss.Println()
+	uHead("NOTES:")
+	fmt.Println("  Group names must not conflict with service names.")
+	fmt.Println()
 }

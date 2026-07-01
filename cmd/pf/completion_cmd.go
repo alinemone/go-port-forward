@@ -10,8 +10,6 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-
-	"charm.land/lipgloss/v2"
 )
 
 // newCompletionCmd replaces Cobra's default `completion` command so we can add
@@ -53,16 +51,16 @@ func newCompletionCmd() *cobra.Command {
 }
 
 func showCompletionUsage() {
-	helpSection("Completion", "pf completion <shell> | install [shell]")
-	helpRow("bash | zsh | fish | powershell", "Print the completion script for that shell")
-	helpRow("install [shell]", "Auto-install into your shell config (detects shell if omitted)")
+	uHead("COMPLETION:")
+	uRow(34, "completion bash|zsh|fish|powershell", "Print the completion script for that shell")
+	uRow(34, "completion install [shell]", "Auto-install into your shell config (detects shell if omitted)")
+	uExample(
+		"completion install",
+		"completion install powershell",
+		"completion bash > ~/.local/share/bash-completion/completions/pf",
+	)
 
-	helpSection("Examples", "")
-	helpExample("completion install", "set up completion for your current shell")
-	helpExample("completion install powershell", "")
-	helpExample("completion bash > ~/.local/share/bash-completion/completions/pf", "")
-
-	lipgloss.Println()
+	fmt.Println()
 }
 
 func newCompletionInstallCmd() *cobra.Command {

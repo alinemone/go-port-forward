@@ -228,10 +228,10 @@ func TestAddKubectlCertFlags(t *testing.T) {
 	if result == cmd {
 		t.Error("expected flags to be added")
 	}
-	if !contains(result, "--client-certificate=/tmp/cert.pem") {
+	if !contains(result, `--client-certificate="/tmp/cert.pem"`) {
 		t.Errorf("missing cert flag in %q", result)
 	}
-	if !contains(result, "--client-key=/tmp/key.pem") {
+	if !contains(result, `--client-key="/tmp/key.pem"`) {
 		t.Errorf("missing key flag in %q", result)
 	}
 
@@ -252,11 +252,20 @@ func TestAddKubectlCertFlags(t *testing.T) {
 	// Multiple kubectl invocations in one command
 	multi := "kubectl config use-context production && kubectl -n prod port-forward svc/db 5432:5432"
 	result4 := addKubectlCertFlags(multi, "/tmp/cert.pem", "/tmp/key.pem")
-	if strings.Count(result4, "--client-certificate=/tmp/cert.pem") != 2 {
+	if strings.Count(result4, `--client-certificate="/tmp/cert.pem"`) != 2 {
 		t.Errorf("expected cert flag on both kubectl commands, got %q", result4)
 	}
-	if strings.Count(result4, "--client-key=/tmp/key.pem") != 2 {
+	if strings.Count(result4, `--client-key="/tmp/key.pem"`) != 2 {
 		t.Errorf("expected key flag on both kubectl commands, got %q", result4)
+	}
+
+	// Paths containing spaces (e.g. C:\Users\ali mohammadi\...) must be quoted
+	spaced := addKubectlCertFlags(cmd, `C:\Users\ali mohammadi\cert.pem`, `C:\Users\ali mohammadi\key.pem`)
+	if !contains(spaced, `--client-certificate="C:\Users\ali mohammadi\cert.pem"`) {
+		t.Errorf("cert path with spaces not quoted in %q", spaced)
+	}
+	if !contains(spaced, `--client-key="C:\Users\ali mohammadi\key.pem"`) {
+		t.Errorf("key path with spaces not quoted in %q", spaced)
 	}
 }
 

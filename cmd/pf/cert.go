@@ -66,17 +66,13 @@ func runCertRemoveCommand(certMgr *cert.Manager) {
 }
 
 func showCertUsage() {
-	helpSection("Certificate Management", "pf cert <sub>")
-	helpRow("add <p12-file>", "Add a certificate for all kubectl services")
-	helpRow("list", "Show the configured certificate")
-	helpRow("remove", "Remove the certificate")
+	uHead("CERTIFICATE:")
+	uRow(22, "cert add <p12-file>", "Add a certificate for all kubectl services")
+	uRow(22, "cert list", "Show the configured certificate")
+	uRow(22, "cert remove", "Remove the certificate")
+	uExample("cert add company-vpn.p12", "cert list", "cert remove")
 
-	helpSection("Examples", "")
-	helpExample("cert add company-vpn.p12", "")
-	helpExample("cert list", "")
-	helpExample("cert remove", "")
-
-	helpSection("Note", "")
-	helpNote("The certificate is auto-injected into every `pf k` / `pf kubectl` call.")
-	lipgloss.Println()
+	uHead("NOTES:")
+	fmt.Println("  The certificate is auto-injected into every 'pf k' / 'pf kubectl' call.")
+	fmt.Println()
 }

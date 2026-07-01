@@ -6,7 +6,6 @@ import (
 	"os"
 	"strings"
 
-	"charm.land/lipgloss/v2"
 	"github.com/alinemone/go-port-forward/internal/configedit"
 	"github.com/alinemone/go-port-forward/internal/storage"
 	"github.com/alinemone/go-port-forward/internal/updater"
@@ -113,14 +112,15 @@ func runUpdateCommand(args []string) {
 }
 
 func showUpdateUsage() {
-	helpSection("Update", "pf update [flags]")
-	helpRow("u, update", "Download the latest release and replace this binary")
-	helpRow("--yes", "Skip the confirmation prompt (for scripts)")
-	helpRow("--force", "Re-install even if already up to date")
+	uHead("UPDATE:")
+	uRow(16, "u, update", "Download the latest release and replace this binary")
+	uRow(16, "--yes", "Skip the confirmation prompt (for scripts)")
+	uRow(16, "--force", "Re-install even if already up to date")
+	uExample("update", "update --yes", "update --force")
 
-	helpSection("Notes", "")
-	helpNote("The binary path is auto-detected (os.Executable), so it works anywhere on PATH.")
-	helpNote("On Windows the running pf.exe is renamed to pf.exe.old and cleaned up next launch.")
-	helpNote("If the install dir isn't writable, pf re-launches with sudo / a UAC prompt.")
-	lipgloss.Println()
+	uHead("NOTES:")
+	fmt.Println("  The binary path is auto-detected (os.Executable), so it works anywhere on PATH.")
+	fmt.Println("  On Windows the running pf.exe is renamed to pf.exe.old and cleaned up next launch.")
+	fmt.Println("  If the install dir isn't writable, pf re-launches with sudo / a UAC prompt.")
+	fmt.Println()
 }
