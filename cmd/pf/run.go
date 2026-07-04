@@ -105,12 +105,16 @@ func runStartCommand(args []string) {
 		}(name)
 	}
 
-	if _, err := program.Run(); err != nil {
-		fmt.Printf("Error: %v\n", err)
+	// Always tear down every service before returning — even when the UI exits
+	// with an error or is killed by a signal — so no forwarder is left holding a
+	// port. StopAllServices is idempotent, so the in-UI quit path calling it too
+	// is harmless.
+	_, runErr := program.Run()
+	mgr.StopAllServices()
+	if runErr != nil {
+		fmt.Printf("Error: %v\n", runErr)
 		os.Exit(1)
 	}
-
-	mgr.StopAllServices()
 }
 
 type runTargetStore interface {

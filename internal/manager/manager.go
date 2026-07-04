@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
-	"net"
 	"os"
 	"os/exec"
 	"regexp"
@@ -420,40 +419,6 @@ func killProcessTree(proc *os.Process) {
 	}
 }
 
-func waitForPortRelease(port string, timeout time.Duration) {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		ln, err := net.Listen("tcp", "127.0.0.1:"+port)
-		if err == nil {
-			ln.Close()
-			return
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
-}
-
-// shutdownGraceTimeout is how long a cancelled service is given to exit on its
-// own before its process tree is force-killed. It's a var so tests can shrink it.
-var shutdownGraceTimeout = 5 * time.Second
-
-// awaitStopOrKill waits for a cancelled service's loop to finish on its own
-// (svc.done closes once the process has exited), and force-kills the process
-// tree if it doesn't within the grace period. The caller must have already
-// invoked svc.cancel().
-func awaitStopOrKill(svc *runningService) {
-	if svc.done == nil {
-		return
-	}
-	select {
-	case <-svc.done:
-	case <-time.After(shutdownGraceTimeout):
-		svc.mu.RLock()
-		proc := svc.process
-		svc.mu.RUnlock()
-		killProcessTree(proc)
-	}
-}
-
 func (m *ServiceManager) StopService(name string) {
 	m.mu.Lock()
 	svc, exists := m.services[name]
@@ -464,11 +429,7 @@ func (m *ServiceManager) StopService(name string) {
 	delete(m.services, name)
 	m.mu.Unlock()
 
-	if svc.cancel != nil {
-		svc.cancel()
-	}
-
-	awaitStopOrKill(svc)
+	teardownService(svc)
 }
 
 func (m *ServiceManager) restartInPlace(ctx context.Context, name string) {
@@ -480,26 +441,7 @@ func (m *ServiceManager) restartInPlace(ctx context.Context, name string) {
 		return
 	}
 
-	if svc.cancel != nil {
-		svc.cancel()
-	}
-
-	if svc.done != nil {
-		select {
-		case <-svc.done:
-		case <-time.After(5 * time.Second):
-			svc.mu.RLock()
-			proc := svc.process
-			svc.mu.RUnlock()
-			killProcessTree(proc)
-			select {
-			case <-svc.done:
-			case <-time.After(2 * time.Second):
-			}
-		}
-	}
-
-	waitForPortRelease(svc.localPort, 5*time.Second)
+	teardownService(svc)
 
 	svcCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
@@ -572,16 +514,21 @@ func (m *ServiceManager) StopAllServices() {
 	m.mu.Unlock()
 
 	procs := make([]*os.Process, 0, len(services))
+	ports := make([]string, 0, len(services))
 	for _, svc := range services {
-		svc.mu.RLock()
-		proc := svc.process
-		svc.mu.RUnlock()
-		if proc != nil {
+		if proc := svc.currentProcess(); proc != nil {
 			procs = append(procs, proc)
+		}
+		if svc.localPort != "" {
+			ports = append(ports, svc.localPort)
 		}
 	}
 
+	// One batched tree kill for the whole fleet, then verify in parallel that
+	// every local port actually freed — falling back to a port-based kill for
+	// any descendant the tree kill missed.
 	killProcessTrees(procs)
+	ensurePortsFree(ports)
 }
 
 func (m *ServiceManager) ListServiceStates() []model.Service {

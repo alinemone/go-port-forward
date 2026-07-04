@@ -2,6 +2,7 @@ package manager
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"runtime"
@@ -12,14 +13,28 @@ import (
 	"github.com/alinemone/go-port-forward/internal/model"
 )
 
-// TestMain lets the test binary double as a tiny "arg printer": when
-// PF_ARGPRINT=1 it prints its arguments joined by "|" and exits. This is used by
-// TestNewShellCommandPreservesQuotedSpacedPath to observe exactly what arguments
-// a program receives after commandStr passes through the OS shell.
+// TestMain lets the test binary double as two tiny helpers so tests can observe
+// real OS behaviour:
+//   - PF_ARGPRINT=1 prints its arguments joined by "|" and exits (used by
+//     TestNewShellCommandPreservesQuotedSpacedPath to see exactly what a program
+//     receives after commandStr passes through the OS shell).
+//   - PF_HOLDPORT=<port> binds and holds that TCP port in a separate process,
+//     printing "READY", then blocks until killed (used by
+//     TestEnsurePortFreeReleasesHeldPort to exercise the port-based fallback
+//     without killing the test runner itself).
 func TestMain(m *testing.M) {
 	if os.Getenv("PF_ARGPRINT") == "1" {
 		fmt.Println(strings.Join(os.Args[1:], "|"))
 		os.Exit(0)
+	}
+	if port := os.Getenv("PF_HOLDPORT"); port != "" {
+		ln, err := net.Listen("tcp", "127.0.0.1:"+port)
+		if err != nil {
+			os.Exit(1)
+		}
+		defer ln.Close()
+		fmt.Println("READY")
+		select {} // hold the port until the parent kills us
 	}
 	os.Exit(m.Run())
 }
