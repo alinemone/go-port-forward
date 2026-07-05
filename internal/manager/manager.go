@@ -179,7 +179,9 @@ func ensureValidCommand(command string) error {
 		`rm\s+-rf`,
 		`dd\s+if=`,
 		`mkfs`,
-		`format`,
+		// Windows disk format ("format c:"), not the word "format" itself —
+		// kubectl/psql commands legitimately contain e.g. --output=custom-format.
+		`\bformat\s+[a-z]:`,
 		`del\s+/f`,
 		`shutdown`,
 		`reboot`,

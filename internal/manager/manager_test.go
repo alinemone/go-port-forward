@@ -306,6 +306,8 @@ func TestEnsureValidCommand(t *testing.T) {
 	valid := []string{
 		"kubectl port-forward svc/db 5432:5432",
 		"ssh -L 8080:localhost:80 user@host",
+		// "format" as an ordinary word must not trip the disk-format pattern.
+		"kubectl get pods --output=custom-format 8080:80",
 	}
 	for _, cmd := range valid {
 		if err := ensureValidCommand(cmd); err != nil {
@@ -317,6 +319,7 @@ func TestEnsureValidCommand(t *testing.T) {
 		"",
 		"rm -rf /",
 		"dd if=/dev/zero",
+		"format c: /q",
 		"shutdown now",
 		"reboot",
 	}
