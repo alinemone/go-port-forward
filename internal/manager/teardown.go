@@ -24,6 +24,33 @@ func (s *runningService) currentProcess() *os.Process {
 	return s.process
 }
 
+// doneChannel returns the service's run-loop completion channel under the lock
+// (restartInPlace swaps it, so it must not be read bare).
+func (s *runningService) doneChannel() chan struct{} {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.done
+}
+
+// awaitServiceLoops waits — bounded by timeout overall — for each service's run
+// loop to exit. Bulk shutdown calls this between the batched tree kill and the
+// port verification so an in-flight runServiceOnce cannot spawn a forwarder
+// after its port was already checked.
+func awaitServiceLoops(svcs []*runningService, timeout time.Duration) {
+	deadline := time.After(timeout)
+	for _, svc := range svcs {
+		done := svc.doneChannel()
+		if done == nil {
+			continue
+		}
+		select {
+		case <-done:
+		case <-deadline:
+			return
+		}
+	}
+}
+
 // isPortFree reports whether nothing is listening on the given local port. An
 // empty port is treated as free (nothing to release).
 func isPortFree(port string) bool {
@@ -117,4 +144,18 @@ func ensurePortsFree(ports []string) {
 		}(port)
 	}
 	wg.Wait()
+}
+
+// VerifyPortsReleased is the caller's final safety net after a shutdown: it
+// force-frees any of the given local ports that are somehow still held and
+// reports the ones that stayed busy even after that. An empty result means
+// every port is confirmed released.
+func VerifyPortsReleased(ports []string) (stillBusy []string) {
+	ensurePortsFree(ports)
+	for _, port := range ports {
+		if !isPortFree(port) {
+			stillBusy = append(stillBusy, port)
+		}
+	}
+	return stillBusy
 }

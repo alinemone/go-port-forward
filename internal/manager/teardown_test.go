@@ -112,6 +112,22 @@ func TestEnsurePortFreeReleasesHeldPort(t *testing.T) {
 	}
 }
 
+// TestVerifyPortsReleasedConfirmsFreePorts: released and empty ports must come
+// back clean so callers can trust an empty result as "everything freed".
+func TestVerifyPortsReleasedConfirmsFreePorts(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	_, port, _ := net.SplitHostPort(ln.Addr().String())
+	ln.Close()
+	waitForPortRelease(port, 2*time.Second)
+
+	if busy := VerifyPortsReleased([]string{port, ""}); len(busy) != 0 {
+		t.Errorf("expected all ports released, still busy: %v", busy)
+	}
+}
+
 // TestTeardownServicesRunsConcurrently proves bulk teardown is parallel: each
 // service's loop exits after a fixed delay, so serial teardown would take
 // n*delay while a concurrent one takes ~delay.

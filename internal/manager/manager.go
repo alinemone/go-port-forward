@@ -300,6 +300,10 @@ func (m *ServiceManager) runServiceLoop(ctx context.Context, svc *runningService
 }
 
 func (m *ServiceManager) runServiceOnce(ctx context.Context, svc *runningService) {
+	if ctx.Err() != nil {
+		return // shutdown won the race; don't launch a doomed forwarder
+	}
+
 	svc.mu.Lock()
 	svc.status = model.StatusConnecting
 	svc.lastError = ""
@@ -342,6 +346,13 @@ func (m *ServiceManager) runServiceOnce(ctx context.Context, svc *runningService
 	svc.mu.Lock()
 	svc.process = cmd.Process
 	svc.mu.Unlock()
+
+	// Close the shutdown race: if cancellation landed while this process was
+	// being launched, the bulk-kill batch ran without its PID and the ctx
+	// watcher below stands down for bulk-killed services — reap it here.
+	if ctx.Err() != nil {
+		killProcessTree(cmd.Process)
+	}
 
 	go func() {
 		<-ctx.Done()
@@ -523,10 +534,13 @@ func (m *ServiceManager) StopAllServices() {
 		}
 	}
 
-	// One batched tree kill for the whole fleet, then verify in parallel that
-	// every local port actually freed — falling back to a port-based kill for
-	// any descendant the tree kill missed.
+	// One batched tree kill for the whole fleet, then wait (bounded) for every
+	// run loop to wind down so no in-flight restart can spawn a fresh forwarder
+	// behind our back, and finally verify in parallel that every local port
+	// actually freed — falling back to a port-based kill for anything the tree
+	// kill missed.
 	killProcessTrees(procs)
+	awaitServiceLoops(services, shutdownGraceTimeout)
 	ensurePortsFree(ports)
 }
 

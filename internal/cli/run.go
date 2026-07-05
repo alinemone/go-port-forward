@@ -65,10 +65,15 @@ func runStartCommand(args []string) {
 		cancel()
 	}()
 
+	localPorts := make([]string, 0, len(serviceNames))
 	for _, name := range serviceNames {
-		if _, err := st.GetService(name); err != nil {
+		command, err := st.GetService(name)
+		if err != nil {
 			fmt.Printf("Error: Service '%s' not found\n", name)
 			os.Exit(1)
+		}
+		if localPort, _ := storage.ParsePortsFromCommand(command); localPort != "" {
+			localPorts = append(localPorts, localPort)
 		}
 	}
 
@@ -112,6 +117,15 @@ func runStartCommand(args []string) {
 	// is harmless.
 	_, runErr := program.Run()
 	mgr.StopAllServices()
+
+	// Final guarantee that quitting really released every forwarded port: any
+	// port still held here (e.g. by a forwarder that escaped the tree kill) is
+	// force-freed, and whatever survives even that is reported loudly.
+	if busy := manager.VerifyPortsReleased(localPorts); len(busy) > 0 {
+		fmt.Printf("Warning: port(s) still in use after shutdown: %s\n", strings.Join(busy, ", "))
+		fmt.Println("Run 'pf cleanup' to force-free them.")
+	}
+
 	if runErr != nil {
 		fmt.Printf("Error: %v\n", runErr)
 		os.Exit(1)

@@ -45,9 +45,16 @@ func TestMain(m *testing.M) {
 			fmt.Println("HOLDPORT bind failed:", err)
 			os.Exit(1)
 		}
-		defer ln.Close()
 		fmt.Println("READY")
-		select {} // hold the port until the parent kills us
+		// Hold the port by serving the listener until the parent kills us.
+		// (A bare select{} would trip Go's deadlock detector and crash.)
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				os.Exit(0)
+			}
+			conn.Close()
+		}
 	}
 	os.Exit(m.Run())
 }
@@ -88,7 +95,14 @@ func TestNewShellCommandPreservesQuotedSpacedPath(t *testing.T) {
 // service's graceful-exit channel: it cancels + force-kills and returns. Here
 // the services have no live process and a done channel that never closes, so a
 // correct implementation must still return effectively immediately.
-func TestStopAllServicesDoesNotWait(t *testing.T) {
+// TestStopAllServicesWaitBoundedByGrace: run loops get a chance to wind down
+// before ports are verified, but a stuck loop must never hang shutdown — the
+// wait is capped by shutdownGraceTimeout.
+func TestStopAllServicesWaitBoundedByGrace(t *testing.T) {
+	origGrace := shutdownGraceTimeout
+	shutdownGraceTimeout = 150 * time.Millisecond
+	defer func() { shutdownGraceTimeout = origGrace }()
+
 	const n = 8
 	m := &ServiceManager{services: make(map[string]*runningService)}
 	cancelled := make([]bool, n)
@@ -97,7 +111,7 @@ func TestStopAllServicesDoesNotWait(t *testing.T) {
 		m.services[fmt.Sprintf("svc%d", i)] = &runningService{
 			name:   fmt.Sprintf("svc%d", i),
 			cancel: func() { cancelled[i] = true },
-			done:   make(chan struct{}), // never closed
+			done:   make(chan struct{}), // never closed → simulates a stuck loop
 			// process is nil -> killProcessTrees is a no-op
 		}
 	}
@@ -111,8 +125,8 @@ func TestStopAllServicesDoesNotWait(t *testing.T) {
 	m.StopAllServices()
 	elapsed := time.Since(start)
 
-	if elapsed > 500*time.Millisecond {
-		t.Errorf("StopAllServices blocked for %v; it must not wait on done", elapsed)
+	if elapsed > 2*time.Second {
+		t.Errorf("StopAllServices blocked for %v; the loop wait must be capped by the grace timeout", elapsed)
 	}
 	for i := range cancelled {
 		if !cancelled[i] {
