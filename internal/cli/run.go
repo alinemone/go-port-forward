@@ -93,7 +93,7 @@ func runStartCommand(args []string) {
 	}
 
 	// Start UI immediately
-	u := ui.NewUI(mgr, ctx)
+	u := ui.NewUI(ctx, mgr, st)
 	program := tea.NewProgram(u)
 
 	// Start all services in parallel - they will appear in UI as they connect

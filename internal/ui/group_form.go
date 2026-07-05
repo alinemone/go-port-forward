@@ -4,80 +4,89 @@ import (
 	"fmt"
 	"strings"
 
+	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
 	"github.com/alinemone/go-port-forward/internal/manager"
-	"github.com/alinemone/go-port-forward/internal/storage"
-	"github.com/alinemone/go-port-forward/internal/stringutil"
 )
 
+// groupFormState is the state of the add/edit-group form: the group name
+// input, the selectable list of member services, keyboard focus, and the last
+// validation error.
+type groupFormState struct {
+	mode          string // "" = closed, "new", "edit"
+	originalName  string // name before editing (rename detection)
+	nameInput     textinput.Model
+	errorMsg      string
+	focusedField  int      // 0 = name, 1 = services list
+	serviceNames  []string // all services offered for membership
+	selected      map[string]bool
+	serviceCursor int
+}
+
 func (u *UI) openNewGroupForm() tea.Cmd {
-	names, err := storage.NewStorage().ListServiceNames()
+	names, err := u.store.ListServiceNames()
 	if err != nil {
 		return nil
 	}
-	u.groupFormMode = "new"
-	u.groupFormOrig = ""
-	u.groupFormErr = ""
-	u.groupFormName = newServiceTextInput("e.g. backend", "", u.formInputWidth())
-	u.groupFormServices = names
-	u.groupFormSelected = make(map[string]bool)
-	u.groupFormFocus = 0
-	u.groupFormSvcCursor = 0
-	return u.groupFormName.Focus()
+	u.groupForm.mode = "new"
+	u.groupForm.originalName = ""
+	u.groupForm.errorMsg = ""
+	u.groupForm.nameInput = newServiceTextInput("e.g. backend", "", u.formInputWidth())
+	u.groupForm.serviceNames = names
+	u.groupForm.selected = make(map[string]bool)
+	u.groupForm.focusedField = 0
+	u.groupForm.serviceCursor = 0
+	return u.groupForm.nameInput.Focus()
 }
 
 func (u *UI) openEditGroupFormFor(name string) tea.Cmd {
-	names, err := storage.NewStorage().ListServiceNames()
+	names, err := u.store.ListServiceNames()
 	if err != nil {
 		return nil
 	}
-	u.groupFormMode = "edit"
-	u.groupFormOrig = name
-	u.groupFormErr = ""
-	u.groupFormName = newServiceTextInput("group name", name, u.formInputWidth())
-	u.groupFormServices = names
-	u.groupFormSelected = make(map[string]bool)
-	for _, svc := range u.manageGroups[name] {
-		u.groupFormSelected[svc] = true
+	u.groupForm.mode = "edit"
+	u.groupForm.originalName = name
+	u.groupForm.errorMsg = ""
+	u.groupForm.nameInput = newServiceTextInput("group name", name, u.formInputWidth())
+	u.groupForm.serviceNames = names
+	u.groupForm.selected = make(map[string]bool)
+	for _, svc := range u.manage.groups[name] {
+		u.groupForm.selected[svc] = true
 	}
-	u.groupFormFocus = 0
-	u.groupFormSvcCursor = 0
-	return u.groupFormName.Focus()
+	u.groupForm.focusedField = 0
+	u.groupForm.serviceCursor = 0
+	return u.groupForm.nameInput.Focus()
 }
 
 func (u *UI) closeGroupForm() {
-	u.groupFormMode = ""
-	u.groupFormErr = ""
-	u.groupFormName.Blur()
+	u.groupForm.mode = ""
+	u.groupForm.errorMsg = ""
+	u.groupForm.nameInput.Blur()
 }
 
 func (u *UI) toggleGroupFormFocus() tea.Cmd {
-	if u.groupFormFocus == 0 {
-		u.groupFormFocus = 1
-		u.groupFormName.Blur()
+	if u.groupForm.focusedField == 0 {
+		u.groupForm.focusedField = 1
+		u.groupForm.nameInput.Blur()
 		return nil
 	}
-	u.groupFormFocus = 0
-	return u.groupFormName.Focus()
+	u.groupForm.focusedField = 0
+	return u.groupForm.nameInput.Focus()
 }
 
 func (u *UI) updateGroupForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if paste, ok := msg.(tea.PasteMsg); ok {
-		return u.updateGroupNameInput(paste)
+		return u.forwardGroupFormInput(paste)
 	}
 
 	keyMsg, ok := msg.(tea.KeyMsg)
 	if !ok {
-		return u.updateGroupNameInput(msg)
+		return u.forwardGroupFormInput(msg)
 	}
 
-	keyRaw := keyMsg.String()
-	key := keyRaw
-	if keyRaw != "space" {
-		key = stringutil.NormalizeToken(keyRaw)
-	}
+	key := normalizeKeyToken(keyMsg)
 
 	switch key {
 	case "esc":
@@ -89,82 +98,82 @@ func (u *UI) updateGroupForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return u.submitGroupForm()
 	}
 
-	if u.groupFormFocus == 1 {
+	if u.groupForm.focusedField == 1 {
 		switch key {
 		case "up", "k":
-			if u.groupFormSvcCursor > 0 {
-				u.groupFormSvcCursor--
+			if u.groupForm.serviceCursor > 0 {
+				u.groupForm.serviceCursor--
 			}
 		case "down", "j":
-			if u.groupFormSvcCursor < len(u.groupFormServices)-1 {
-				u.groupFormSvcCursor++
+			if u.groupForm.serviceCursor < len(u.groupForm.serviceNames)-1 {
+				u.groupForm.serviceCursor++
 			}
 		case "space":
-			if u.groupFormSvcCursor >= 0 && u.groupFormSvcCursor < len(u.groupFormServices) {
-				svc := u.groupFormServices[u.groupFormSvcCursor]
-				u.groupFormSelected[svc] = !u.groupFormSelected[svc]
+			if u.groupForm.serviceCursor >= 0 && u.groupForm.serviceCursor < len(u.groupForm.serviceNames) {
+				svc := u.groupForm.serviceNames[u.groupForm.serviceCursor]
+				u.groupForm.selected[svc] = !u.groupForm.selected[svc]
 			}
 		}
 		return u, nil
 	}
 
-	return u.updateGroupNameInput(msg)
+	return u.forwardGroupFormInput(msg)
 }
 
-func (u *UI) updateGroupNameInput(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (u *UI) forwardGroupFormInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
-	u.groupFormName, cmd = u.groupFormName.Update(msg)
+	u.groupForm.nameInput, cmd = u.groupForm.nameInput.Update(msg)
 	return u, cmd
 }
 
 func (u *UI) submitGroupForm() (tea.Model, tea.Cmd) {
-	name := strings.TrimSpace(u.groupFormName.Value())
+	name := strings.TrimSpace(u.groupForm.nameInput.Value())
 	if err := manager.ValidateServiceName(name); err != nil {
-		u.groupFormErr = err.Error()
+		u.groupForm.errorMsg = err.Error()
 		return u, nil
 	}
 
-	selected := make([]string, 0, len(u.groupFormSelected))
-	for _, svc := range u.groupFormServices {
-		if u.groupFormSelected[svc] {
+	selected := make([]string, 0, len(u.groupForm.selected))
+	for _, svc := range u.groupForm.serviceNames {
+		if u.groupForm.selected[svc] {
 			selected = append(selected, svc)
 		}
 	}
 
-	st := storage.NewStorage()
+	st := u.store
 	var status string
 
-	switch u.groupFormMode {
+	switch u.groupForm.mode {
 	case "new":
-		if _, exists := u.manageGroups[name]; exists {
-			u.groupFormErr = fmt.Sprintf("a group named '%s' already exists", name)
+		if _, exists := u.manage.groups[name]; exists {
+			u.groupForm.errorMsg = fmt.Sprintf("a group named '%s' already exists", name)
 			return u, nil
 		}
 		if err := st.AddGroup(name, selected); err != nil {
-			u.groupFormErr = err.Error()
+			u.groupForm.errorMsg = err.Error()
 			return u, nil
 		}
 		status = fmt.Sprintf("✓ Group '%s' created with %d service(s)", name, len(selected))
 
 	case "edit":
-		orig := u.groupFormOrig
+		orig := u.groupForm.originalName
 		if name != orig {
 			if err := st.RenameGroup(orig, name); err != nil {
-				u.groupFormErr = err.Error()
+				u.groupForm.errorMsg = err.Error()
 				return u, nil
 			}
 		}
 		// AddGroup overwrites the membership of an existing group.
 		if err := st.AddGroup(name, selected); err != nil {
-			u.groupFormErr = err.Error()
+			u.groupForm.errorMsg = err.Error()
 			return u, nil
 		}
 		status = fmt.Sprintf("✓ Group '%s' updated (%d service(s))", name, len(selected))
 	}
 
 	u.closeGroupForm()
-	u.manageSearch = "" // ensure the saved group is visible regardless of any active filter
-	u.buildManageRows()
+	u.manage.searchQuery = "" // ensure the saved group is visible regardless of any active filter
+	u.reloadManageRowsFromStorage()
 	u.focusManage(rowGroup, name)
 	return u, u.setStatus(status)
 }
@@ -179,8 +188,8 @@ func (u *UI) renderGroupForm() string {
 	}
 
 	title := "New group"
-	if u.groupFormMode == "edit" {
-		title = fmt.Sprintf("Edit group: %s", u.groupFormOrig)
+	if u.groupForm.mode == "edit" {
+		title = fmt.Sprintf("Edit group: %s", u.groupForm.originalName)
 	}
 	titleStyled := lipgloss.NewStyle().
 		Foreground(colorAccent).
@@ -192,7 +201,7 @@ func (u *UI) renderGroupForm() string {
 
 	nameLabel := labelStyle.Render("  Name:")
 	servicesLabel := labelStyle.Render("  Services:")
-	if u.groupFormFocus == 0 {
+	if u.groupForm.focusedField == 0 {
 		nameLabel = activeLabel.Render("► Name:")
 	} else {
 		servicesLabel = activeLabel.Render("► Services:")
@@ -202,12 +211,12 @@ func (u *UI) renderGroupForm() string {
 		titleStyled,
 		"",
 		nameLabel,
-		"  " + u.groupFormName.View(),
+		"  " + u.groupForm.nameInput.View(),
 		"",
 		servicesLabel,
 	}
 
-	if len(u.groupFormServices) == 0 {
+	if len(u.groupForm.serviceNames) == 0 {
 		rows = append(rows, lipgloss.NewStyle().
 			Foreground(colorMuted).
 			Italic(true).
@@ -215,23 +224,23 @@ func (u *UI) renderGroupForm() string {
 	} else {
 		const maxVisible = 20
 		start := 0
-		if u.groupFormSvcCursor >= maxVisible {
-			start = u.groupFormSvcCursor - maxVisible + 1
+		if u.groupForm.serviceCursor >= maxVisible {
+			start = u.groupForm.serviceCursor - maxVisible + 1
 		}
 		end := start + maxVisible
-		if end > len(u.groupFormServices) {
-			end = len(u.groupFormServices)
+		if end > len(u.groupForm.serviceNames) {
+			end = len(u.groupForm.serviceNames)
 		}
 
 		for i := start; i < end; i++ {
-			svc := u.groupFormServices[i]
-			onCursor := u.groupFormFocus == 1 && i == u.groupFormSvcCursor
+			svc := u.groupForm.serviceNames[i]
+			onCursor := u.groupForm.focusedField == 1 && i == u.groupForm.serviceCursor
 			marker := "  "
 			if onCursor {
 				marker = lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("► ")
 			}
 			checkbox := "[ ]"
-			if u.groupFormSelected[svc] {
+			if u.groupForm.selected[svc] {
 				checkbox = "[✓]"
 			}
 			svcColor := colorText
@@ -244,15 +253,15 @@ func (u *UI) renderGroupForm() string {
 			rows = append(rows, line)
 		}
 
-		if len(u.groupFormServices) > maxVisible {
+		if len(u.groupForm.serviceNames) > maxVisible {
 			rows = append(rows, lipgloss.NewStyle().
 				Foreground(colorMuted).
-				Render(fmt.Sprintf("  (%d–%d of %d)", start+1, end, len(u.groupFormServices))))
+				Render(fmt.Sprintf("  (%d–%d of %d)", start+1, end, len(u.groupForm.serviceNames))))
 		}
 	}
 
-	if u.groupFormErr != "" {
-		rows = append(rows, "", lipgloss.NewStyle().Foreground(colorError).Render("✗ "+u.groupFormErr))
+	if u.groupForm.errorMsg != "" {
+		rows = append(rows, "", lipgloss.NewStyle().Foreground(colorError).Render("✗ "+u.groupForm.errorMsg))
 	}
 
 	body := lipgloss.JoinVertical(lipgloss.Left, rows...)

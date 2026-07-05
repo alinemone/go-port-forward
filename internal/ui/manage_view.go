@@ -14,7 +14,7 @@ func (u *UI) renderManageGroupRow(name string, cursorOn bool, maxNameLen int, ru
 	if cursorOn {
 		highlight = lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("► ")
 	}
-	box := u.renderSelectCheckbox(u.manageSelGroups[name])
+	box := u.renderSelectCheckbox(u.manage.selectedGroups[name])
 
 	nameColor := colorText
 	if cursorOn {
@@ -23,7 +23,7 @@ func (u *UI) renderManageGroupRow(name string, cursorOn bool, maxNameLen int, ru
 	styledName := lipgloss.NewStyle().Foreground(nameColor).Bold(true).
 		Render(padRightDisplayWidth(truncateRunes(name, maxNameLen), maxNameLen))
 
-	members := u.manageGroups[name]
+	members := u.manage.groups[name]
 	run := 0
 	for _, svc := range members {
 		if running[svc] {
@@ -33,7 +33,7 @@ func (u *UI) renderManageGroupRow(name string, cursorOn bool, maxNameLen int, ru
 	info := lipgloss.NewStyle().Foreground(colorMuted).
 		Render(fmt.Sprintf("%s  %d/%d running", summarizeMembers(members), run, len(members)))
 
-	icon := u.overlayIconCell(u.manageIcons.set.ForGroup())
+	icon := u.overlayIconCell(u.manage.icons.set.ForGroup())
 
 	return highlight + box + " " + icon + styledName + "  " + info
 }
@@ -56,11 +56,11 @@ func (u *UI) renderManageServiceRow(name string, cursorOn bool, maxNameLen int, 
 		box = lipgloss.NewStyle().Foreground(colorMuted).Render("   ")
 		indicator = lipgloss.NewStyle().Foreground(colorAccentAlt).Render("● running")
 	} else {
-		box = u.renderSelectCheckbox(u.manageSelSvcs[name])
+		box = u.renderSelectCheckbox(u.manage.selectedServices[name])
 		indicator = lipgloss.NewStyle().Foreground(colorMuted).Render("○ stopped")
 	}
 
-	icon := u.overlayIconCell(u.manageIcons.set.ForPort(u.manageIcons.ports[name]))
+	icon := u.overlayIconCell(u.manage.icons.set.ForPort(u.manage.icons.ports[name]))
 
 	return highlight + box + " " + icon + styledName + "  " + indicator
 }
@@ -77,7 +77,7 @@ func (u *UI) renderSelectCheckbox(selected bool) string {
 // overlayIconCell renders the leading icon cell for an overlay row from an
 // already-resolved icon, or an empty string when icons are disabled.
 func (u *UI) overlayIconCell(icon icons.Icon) string {
-	if !u.manageIcons.enabled {
+	if !u.manage.icons.enabled {
 		return ""
 	}
 	return renderIconCell(icon.Glyph, icon.Color)
@@ -95,12 +95,12 @@ func (u *UI) renderManageOverlay() string {
 	running := u.runningNameSet()
 
 	maxNameLen := 7
-	for _, n := range u.manageGroupNames {
+	for _, n := range u.manage.groupNames {
 		if len(n) > maxNameLen {
 			maxNameLen = len(n)
 		}
 	}
-	for _, n := range u.manageServices {
+	for _, n := range u.manage.serviceNames {
 		if len(n) > maxNameLen {
 			maxNameLen = len(n)
 		}
@@ -111,10 +111,10 @@ func (u *UI) renderManageOverlay() string {
 
 	u.ensureManageVisible()
 	visible := u.manageVisibleRows()
-	start := u.manageOffset
+	start := u.manage.offset
 	end := start + visible
-	if end > len(u.manageRows) {
-		end = len(u.manageRows)
+	if end > len(u.manage.rows) {
+		end = len(u.manage.rows)
 	}
 	if start > end {
 		start = end
@@ -125,8 +125,8 @@ func (u *UI) renderManageOverlay() string {
 		lipgloss.NewStyle().Foreground(colorMuted).Render("  — groups & services"))
 	rows = append(rows, u.renderManageSearchLine())
 	for i := start; i < end; i++ {
-		row := u.manageRows[i]
-		cursorOn := i == u.manageCursor
+		row := u.manage.rows[i]
+		cursorOn := i == u.manage.cursor
 		switch row.kind {
 		case rowHeaderGroups:
 			rows = append(rows, lipgloss.NewStyle().Foreground(colorHeading).Bold(true).Render("GROUPS"))
@@ -134,13 +134,13 @@ func (u *UI) renderManageOverlay() string {
 			rows = append(rows, lipgloss.NewStyle().Foreground(colorHeading).Bold(true).Render("SERVICES"))
 		case rowEmptyGroups:
 			text := "  (no groups — ^n to create)"
-			if u.manageSearch != "" {
+			if u.manage.searchQuery != "" {
 				text = "  (no matching groups)"
 			}
 			rows = append(rows, lipgloss.NewStyle().Foreground(colorMuted).Italic(true).Render(text))
 		case rowEmptyServices:
 			text := "  (no services — ^n to create)"
-			if u.manageSearch != "" {
+			if u.manage.searchQuery != "" {
 				text = "  (no matching services)"
 			}
 			rows = append(rows, lipgloss.NewStyle().Foreground(colorMuted).Italic(true).Render(text))
@@ -151,9 +151,9 @@ func (u *UI) renderManageOverlay() string {
 		}
 	}
 
-	if len(u.manageRows) > visible {
+	if len(u.manage.rows) > visible {
 		rows = append(rows, lipgloss.NewStyle().Foreground(colorMuted).
-			Render(fmt.Sprintf("(%d–%d of %d)", start+1, end, len(u.manageRows))))
+			Render(fmt.Sprintf("(%d–%d of %d)", start+1, end, len(u.manage.rows))))
 	}
 
 	table := lipgloss.JoinVertical(lipgloss.Left, rows...)
@@ -167,7 +167,7 @@ func (u *UI) renderManageOverlay() string {
 	sections := []string{overlayBox}
 
 	switch {
-	case u.manageNewPrompt:
+	case u.manage.showNewPrompt:
 		promptText := lipgloss.NewStyle().Foreground(colorAccentAlt).Bold(true).Render("Create new —")
 		promptKeys := renderActionChips([][2]string{{"g", "group"}, {"s", "service"}, {"esc", "cancel"}})
 		promptBody := lipgloss.JoinVertical(lipgloss.Left, promptText, "", promptKeys)
@@ -177,10 +177,10 @@ func (u *UI) renderManageOverlay() string {
 			Padding(0, 1).
 			Width(width-2).
 			Render(promptBody))
-	case u.manageConfirmDelete != "":
-		msg := fmt.Sprintf("Delete service '%s'? This cannot be undone.", u.manageConfirmDelete)
-		if u.manageConfirmKind == "group" {
-			msg = fmt.Sprintf("Delete group '%s'? Member services are kept.", u.manageConfirmDelete)
+	case u.manage.confirmDeleteName != "":
+		msg := fmt.Sprintf("Delete service '%s'? This cannot be undone.", u.manage.confirmDeleteName)
+		if u.manage.confirmDeleteKind == "group" {
+			msg = fmt.Sprintf("Delete group '%s'? Member services are kept.", u.manage.confirmDeleteName)
 		}
 		confirmText := lipgloss.NewStyle().Foreground(colorWarn).Bold(true).Render(msg)
 		confirmKeys := renderActionChips([][2]string{{"y", "confirm"}, {"n", "cancel"}})
@@ -191,10 +191,10 @@ func (u *UI) renderManageOverlay() string {
 			Padding(0, 1).
 			Width(width-2).
 			Render(confirmBody))
-	case u.manageErr != "":
-		sections = append(sections, lipgloss.NewStyle().Foreground(colorError).Render("✗ "+u.manageErr))
-	case u.manageInfo != "":
-		sections = append(sections, lipgloss.NewStyle().Foreground(colorAccentAlt).Bold(true).Render(u.manageInfo))
+	case u.manage.errorMsg != "":
+		sections = append(sections, lipgloss.NewStyle().Foreground(colorError).Render("✗ "+u.manage.errorMsg))
+	case u.manage.infoMsg != "":
+		sections = append(sections, lipgloss.NewStyle().Foreground(colorAccentAlt).Bold(true).Render(u.manage.infoMsg))
 	}
 
 	sections = append(sections, renderActionChips([][2]string{
@@ -217,11 +217,11 @@ func (u *UI) renderManageOverlay() string {
 func (u *UI) renderManageSearchLine() string {
 	label := lipgloss.NewStyle().Foreground(colorMuted).Render("Search: ")
 	cursor := lipgloss.NewStyle().Foreground(colorAccent).Render("▏")
-	if u.manageSearch == "" {
+	if u.manage.searchQuery == "" {
 		placeholder := lipgloss.NewStyle().Foreground(colorMuted).Italic(true).Render("type to filter…")
 		return label + cursor + placeholder
 	}
-	query := lipgloss.NewStyle().Foreground(colorAccentAlt).Bold(true).Render(u.manageSearch)
+	query := lipgloss.NewStyle().Foreground(colorAccentAlt).Bold(true).Render(u.manage.searchQuery)
 	return label + query + cursor
 }
 

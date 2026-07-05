@@ -7,11 +7,10 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/alinemone/go-port-forward/internal/configedit"
-	"github.com/alinemone/go-port-forward/internal/storage"
 )
 
 func (u *UI) launchEditor() tea.Cmd {
-	st := storage.NewStorage()
+	st := u.store
 	data, err := st.LoadData()
 	if err != nil {
 		return func() tea.Msg { return editResultMsg{err: err} }

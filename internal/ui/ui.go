@@ -6,12 +6,12 @@ import (
 	"strings"
 	"time"
 
-	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
 	"github.com/alinemone/go-port-forward/internal/model"
+	"github.com/alinemone/go-port-forward/internal/storage"
 	"github.com/alinemone/go-port-forward/internal/stringutil"
 )
 
@@ -46,6 +46,7 @@ type Controller interface {
 
 type UI struct {
 	manager     Controller
+	store       *storage.Storage
 	services    []model.Service
 	cursorIndex int
 	quitting    bool
@@ -54,54 +55,38 @@ type UI struct {
 	viewport    viewport.Model
 	ready       bool
 	ctx         context.Context
-	// service form (new/edit) — shared, launched from the manage overlay
-	addFormMode  string
-	addFormName  textinput.Model
-	addFormCmd   textinput.Model
-	addFormFocus int // 0 = name, 1 = command
-	addFormOrig  string
-	addFormErr   string
-	// group form (new/edit) — shared, launched from the manage overlay
-	groupFormMode      string // "" = list, "new", "edit"
-	groupFormOrig      string
-	groupFormName      textinput.Model
-	groupFormErr       string
-	groupFormFocus     int // 0 = name, 1 = services list
-	groupFormServices  []string
-	groupFormSelected  map[string]bool
-	groupFormSvcCursor int
-	// unified manage overlay (groups + services in one list)
-	manageMode          bool
-	manageRows          []manageRow
-	manageCursor        int
-	manageOffset        int
-	manageGroups        map[string][]string
-	manageGroupNames    []string
-	manageServices      []string
-	manageIcons         overlayIcons // resolved icon state for the overlay list
-	manageSelGroups     map[string]bool
-	manageSelSvcs       map[string]bool
-	manageConfirmDelete string
-	manageConfirmKind   string // "group" | "service"
-	manageErr           string
-	manageInfo          string // transient success/info line (e.g. "Started N service(s)")
-	manageSearch        string // live filter query for the groups+services list
-	manageNewPrompt     bool   // "n" → choose group vs service
-	editStatus          string
-	editStatusSeq       int
-	logFilterSelected   bool
-	spinnerFrame        int
-	tableOffset         int
+
+	serviceForm serviceFormState // add/edit service form, launched from the manage overlay
+	groupForm   groupFormState   // add/edit group form, launched from the manage overlay
+	manage      manageState      // unified manage overlay (groups + services in one list)
+
+	editStatus        string
+	editStatusSeq     int
+	logFilterSelected bool
+	spinnerFrame      int
+	tableOffset       int
 }
 
 const uiTickInterval = 500 * time.Millisecond
 
-func NewUI(mgr Controller, ctx context.Context) *UI {
+func NewUI(ctx context.Context, mgr Controller, store *storage.Storage) *UI {
 	return &UI{
 		manager:  mgr,
+		store:    store,
 		services: []model.Service{},
 		ctx:      ctx,
 	}
+}
+
+// normalizeKeyToken maps a key message to the canonical token used by the
+// keymap switches. "space" is kept verbatim so it stays distinguishable from a
+// literal space rune typed into search or text inputs.
+func normalizeKeyToken(msg tea.KeyMsg) string {
+	raw := msg.String()
+	if raw == "space" {
+		return raw
+	}
+	return stringutil.NormalizeToken(raw)
 }
 
 func (u *UI) Init() tea.Cmd {
@@ -126,19 +111,19 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			u.viewport.SetHeight(viewportHeight)
 		}
 
-		if u.manageMode && u.addFormMode != "" {
+		if u.manage.active && u.serviceForm.mode != "" {
 			inputWidth := u.formInputWidth()
-			u.addFormName.SetWidth(inputWidth)
-			u.addFormCmd.SetWidth(inputWidth)
+			u.serviceForm.nameInput.SetWidth(inputWidth)
+			u.serviceForm.commandInput.SetWidth(inputWidth)
 		}
-		if u.manageMode && u.groupFormMode != "" {
-			u.groupFormName.SetWidth(u.formInputWidth())
+		if u.manage.active && u.groupForm.mode != "" {
+			u.groupForm.nameInput.SetWidth(u.formInputWidth())
 		}
 
 	case tea.MouseWheelMsg:
 		switch {
-		case u.manageMode:
-			if u.addFormMode == "" && u.groupFormMode == "" {
+		case u.manage.active:
+			if u.serviceForm.mode == "" && u.groupForm.mode == "" {
 				switch msg.Button {
 				case tea.MouseWheelUp:
 					u.moveManageCursor(-1)
@@ -154,12 +139,8 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if u.quitting {
 			return u, nil
 		}
-		keyRaw := msg.String()
-		key := keyRaw
-		if keyRaw != "space" {
-			key = stringutil.NormalizeToken(keyRaw)
-		}
-		if u.manageMode {
+		key := normalizeKeyToken(msg)
+		if u.manage.active {
 			return u.updateManageMode(msg)
 		}
 
@@ -230,8 +211,8 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch {
 		case msg.ok:
 			status = fmt.Sprintf("✓ Config saved: %d service(s), %d group(s) — affects future runs", msg.services, msg.groups)
-			if u.manageMode && u.addFormMode == "" && u.groupFormMode == "" {
-				u.buildManageRows()
+			if u.manage.active && u.serviceForm.mode == "" && u.groupForm.mode == "" {
+				u.reloadManageRowsFromStorage()
 			}
 		case msg.tmpPath != "":
 			status = fmt.Sprintf("✗ Invalid config: %v — edits kept at %s (use 'pf edit' to fix)", msg.err, msg.tmpPath)
@@ -269,8 +250,8 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return u, tickCmd(uiTickInterval)
 
 	default:
-		if u.manageMode {
-			return u.updateManageInput(msg)
+		if u.manage.active {
+			return u.forwardOverlayInput(msg)
 		}
 	}
 
@@ -315,11 +296,11 @@ func (u *UI) viewContent() string {
 		return "Initializing..."
 	}
 
-	if u.manageMode {
-		if u.addFormMode != "" {
+	if u.manage.active {
+		if u.serviceForm.mode != "" {
 			return u.renderServiceForm()
 		}
-		if u.groupFormMode != "" {
+		if u.groupForm.mode != "" {
 			return u.renderGroupForm()
 		}
 		return u.renderManageOverlay()

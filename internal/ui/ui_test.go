@@ -45,11 +45,11 @@ func TestRenderServiceTableShowsColoredPortIcon(t *testing.T) {
 }
 
 func TestManageServiceRowShowsIconWhenEnabled(t *testing.T) {
-	u := &UI{manageIcons: overlayIcons{
+	u := &UI{manage: manageState{icons: overlayIcons{
 		enabled: true,
 		set:     icons.NewSet(nil, nil),
 		ports:   map[string]string{"db": "5432"},
-	}}
+	}}}
 	out := u.renderManageServiceRow("db", false, 10, map[string]bool{})
 	if !strings.Contains(out, icons.ForPort("5432").Glyph) {
 		t.Fatalf("expected port icon in overlay row: %q", out)
@@ -57,11 +57,11 @@ func TestManageServiceRowShowsIconWhenEnabled(t *testing.T) {
 }
 
 func TestManageServiceRowHidesIconWhenDisabled(t *testing.T) {
-	u := &UI{manageIcons: overlayIcons{
+	u := &UI{manage: manageState{icons: overlayIcons{
 		enabled: false,
 		set:     icons.NewSet(nil, nil),
 		ports:   map[string]string{"db": "5432"},
-	}}
+	}}}
 	out := u.renderManageServiceRow("db", false, 10, map[string]bool{})
 	if strings.Contains(out, icons.ForPort("5432").Glyph) {
 		t.Fatalf("icons disabled: no glyph expected, got: %q", out)
@@ -69,11 +69,11 @@ func TestManageServiceRowHidesIconWhenDisabled(t *testing.T) {
 }
 
 func TestManageGroupRowShowsFolderIconWhenEnabled(t *testing.T) {
-	u := &UI{
-		manageIcons:     overlayIcons{enabled: true, set: icons.NewSet(nil, nil)},
-		manageGroups:    map[string][]string{"backend": {"db"}},
-		manageSelGroups: map[string]bool{},
-	}
+	u := &UI{manage: manageState{
+		icons:          overlayIcons{enabled: true, set: icons.NewSet(nil, nil)},
+		groups:         map[string][]string{"backend": {"db"}},
+		selectedGroups: map[string]bool{},
+	}}
 	out := u.renderManageGroupRow("backend", false, 10, map[string]bool{})
 	if !strings.Contains(out, icons.ForGroup().Glyph) {
 		t.Fatalf("expected group folder icon in overlay row: %q", out)

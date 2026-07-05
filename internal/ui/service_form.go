@@ -9,9 +9,18 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/alinemone/go-port-forward/internal/manager"
-	"github.com/alinemone/go-port-forward/internal/storage"
-	"github.com/alinemone/go-port-forward/internal/stringutil"
 )
+
+// serviceFormState is the state of the add/edit-service form: which mode it is
+// in, the two text inputs, keyboard focus, and the last validation error.
+type serviceFormState struct {
+	mode         string // "" = closed, "new", "edit"
+	originalName string // name before editing (rename detection)
+	nameInput    textinput.Model
+	commandInput textinput.Model
+	focusedField int // 0 = name, 1 = command
+	errorMsg     string
+}
 
 func (u *UI) formInputWidth() int {
 	if u.width <= 0 {
@@ -36,131 +45,127 @@ func newServiceTextInput(placeholder, value string, width int) textinput.Model {
 }
 
 func (u *UI) openNewServiceForm() tea.Cmd {
-	u.addFormMode = "new"
-	u.addFormOrig = ""
-	u.addFormErr = ""
+	u.serviceForm.mode = "new"
+	u.serviceForm.originalName = ""
+	u.serviceForm.errorMsg = ""
 	inputWidth := u.formInputWidth()
-	u.addFormName = newServiceTextInput("e.g. db", "", inputWidth)
-	u.addFormCmd = newServiceTextInput("e.g. kubectl port-forward service/postgres 5432:5432", "", inputWidth)
-	u.addFormFocus = 0
-	u.addFormCmd.Blur()
-	return u.addFormName.Focus()
+	u.serviceForm.nameInput = newServiceTextInput("e.g. db", "", inputWidth)
+	u.serviceForm.commandInput = newServiceTextInput("e.g. kubectl port-forward service/postgres 5432:5432", "", inputWidth)
+	u.serviceForm.focusedField = 0
+	u.serviceForm.commandInput.Blur()
+	return u.serviceForm.nameInput.Focus()
 }
 
 func (u *UI) openEditServiceFormFor(name string) tea.Cmd {
-	command, err := storage.NewStorage().GetService(name)
+	command, err := u.store.GetService(name)
 	if err != nil {
 		return nil
 	}
-	u.addFormMode = "edit"
-	u.addFormOrig = name
-	u.addFormErr = ""
+	u.serviceForm.mode = "edit"
+	u.serviceForm.originalName = name
+	u.serviceForm.errorMsg = ""
 	inputWidth := u.formInputWidth()
-	u.addFormName = newServiceTextInput("service name", name, inputWidth)
-	u.addFormCmd = newServiceTextInput("command", command, inputWidth)
-	u.addFormFocus = 0
-	u.addFormCmd.Blur()
-	return u.addFormName.Focus()
+	u.serviceForm.nameInput = newServiceTextInput("service name", name, inputWidth)
+	u.serviceForm.commandInput = newServiceTextInput("command", command, inputWidth)
+	u.serviceForm.focusedField = 0
+	u.serviceForm.commandInput.Blur()
+	return u.serviceForm.nameInput.Focus()
 }
 
-func (u *UI) closeAddForm() {
-	u.addFormMode = ""
-	u.addFormErr = ""
-	u.addFormName.Blur()
-	u.addFormCmd.Blur()
+func (u *UI) closeServiceForm() {
+	u.serviceForm.mode = ""
+	u.serviceForm.errorMsg = ""
+	u.serviceForm.nameInput.Blur()
+	u.serviceForm.commandInput.Blur()
 }
 
-func (u *UI) toggleAddFormFocus() tea.Cmd {
-	if u.addFormFocus == 0 {
-		u.addFormFocus = 1
-		u.addFormName.Blur()
-		return u.addFormCmd.Focus()
+func (u *UI) toggleServiceFormFocus() tea.Cmd {
+	if u.serviceForm.focusedField == 0 {
+		u.serviceForm.focusedField = 1
+		u.serviceForm.nameInput.Blur()
+		return u.serviceForm.commandInput.Focus()
 	}
-	u.addFormFocus = 0
-	u.addFormCmd.Blur()
-	return u.addFormName.Focus()
+	u.serviceForm.focusedField = 0
+	u.serviceForm.commandInput.Blur()
+	return u.serviceForm.nameInput.Focus()
 }
 
-func (u *UI) updateAddForm(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (u *UI) updateServiceForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if paste, ok := msg.(tea.PasteMsg); ok {
-		return u.updateAddFormInput(paste)
+		return u.forwardServiceFormInput(paste)
 	}
 
 	keyMsg, ok := msg.(tea.KeyMsg)
 	if !ok {
-		return u.updateAddFormInput(msg)
+		return u.forwardServiceFormInput(msg)
 	}
 
-	keyRaw := keyMsg.String()
-	key := keyRaw
-	if keyRaw != "space" {
-		key = stringutil.NormalizeToken(keyRaw)
-	}
+	key := normalizeKeyToken(keyMsg)
 
 	switch key {
 	case "esc":
-		u.closeAddForm()
+		u.closeServiceForm()
 		return u, nil
 	case "tab", "shift+tab", "up", "down":
-		return u, u.toggleAddFormFocus()
+		return u, u.toggleServiceFormFocus()
 	case "enter":
 		return u.submitServiceForm()
 	}
 
-	return u.updateAddFormInput(msg)
+	return u.forwardServiceFormInput(msg)
 }
 
-func (u *UI) updateAddFormInput(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (u *UI) forwardServiceFormInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
-	if u.addFormFocus == 0 {
-		u.addFormName, cmd = u.addFormName.Update(msg)
+	if u.serviceForm.focusedField == 0 {
+		u.serviceForm.nameInput, cmd = u.serviceForm.nameInput.Update(msg)
 	} else {
-		u.addFormCmd, cmd = u.addFormCmd.Update(msg)
+		u.serviceForm.commandInput, cmd = u.serviceForm.commandInput.Update(msg)
 	}
 	return u, cmd
 }
 
 func (u *UI) submitServiceForm() (tea.Model, tea.Cmd) {
-	name := strings.TrimSpace(u.addFormName.Value())
-	command := strings.TrimSpace(u.addFormCmd.Value())
+	name := strings.TrimSpace(u.serviceForm.nameInput.Value())
+	command := strings.TrimSpace(u.serviceForm.commandInput.Value())
 
 	if err := manager.ValidateServiceName(name); err != nil {
-		u.addFormErr = err.Error()
+		u.serviceForm.errorMsg = err.Error()
 		return u, nil
 	}
 	if err := manager.ValidateCommand(command); err != nil {
-		u.addFormErr = err.Error()
+		u.serviceForm.errorMsg = err.Error()
 		return u, nil
 	}
 
-	st := storage.NewStorage()
+	st := u.store
 	var restartCmd tea.Cmd
 	var status string
 
-	switch u.addFormMode {
+	switch u.serviceForm.mode {
 	case "new":
 		if _, err := st.GetService(name); err == nil {
-			u.addFormErr = fmt.Sprintf("a service named '%s' already exists", name)
+			u.serviceForm.errorMsg = fmt.Sprintf("a service named '%s' already exists", name)
 			return u, nil
 		}
 		if err := st.AddService(name, command); err != nil {
-			u.addFormErr = err.Error()
+			u.serviceForm.errorMsg = err.Error()
 			return u, nil
 		}
 		status = fmt.Sprintf("✓ Service '%s' created — select it and press Enter to run", name)
 
 	case "edit":
-		orig := u.addFormOrig
+		orig := u.serviceForm.originalName
 		wasRunning := u.runningNameSet()[orig]
 
 		if name != orig {
 			if err := st.RenameService(orig, name); err != nil {
-				u.addFormErr = err.Error()
+				u.serviceForm.errorMsg = err.Error()
 				return u, nil
 			}
 		}
 		if err := st.AddService(name, command); err != nil {
-			u.addFormErr = err.Error()
+			u.serviceForm.errorMsg = err.Error()
 			return u, nil
 		}
 
@@ -177,9 +182,9 @@ func (u *UI) submitServiceForm() (tea.Model, tea.Cmd) {
 		}
 	}
 
-	u.closeAddForm()
-	u.manageSearch = "" // ensure the saved service is visible regardless of any active filter
-	u.buildManageRows()
+	u.closeServiceForm()
+	u.manage.searchQuery = "" // ensure the saved service is visible regardless of any active filter
+	u.reloadManageRowsFromStorage()
 	u.focusManage(rowService, name)
 
 	statusCmd := u.setStatus(status)
@@ -199,8 +204,8 @@ func (u *UI) renderServiceForm() string {
 	}
 
 	title := "Add new service"
-	if u.addFormMode == "edit" {
-		title = fmt.Sprintf("Edit service: %s", u.addFormOrig)
+	if u.serviceForm.mode == "edit" {
+		title = fmt.Sprintf("Edit service: %s", u.serviceForm.originalName)
 	}
 	titleStyled := lipgloss.NewStyle().
 		Foreground(colorAccent).
@@ -212,7 +217,7 @@ func (u *UI) renderServiceForm() string {
 
 	nameLabel := labelStyle.Render("  Name:")
 	cmdLabel := labelStyle.Render("  Command:")
-	if u.addFormFocus == 0 {
+	if u.serviceForm.focusedField == 0 {
 		nameLabel = activeLabel.Render("► Name:")
 	} else {
 		cmdLabel = activeLabel.Render("► Command:")
@@ -222,14 +227,14 @@ func (u *UI) renderServiceForm() string {
 		titleStyled,
 		"",
 		nameLabel,
-		"  " + u.addFormName.View(),
+		"  " + u.serviceForm.nameInput.View(),
 		"",
 		cmdLabel,
-		"  " + u.addFormCmd.View(),
+		"  " + u.serviceForm.commandInput.View(),
 	}
 
-	if u.addFormErr != "" {
-		rows = append(rows, "", lipgloss.NewStyle().Foreground(colorError).Render("✗ "+u.addFormErr))
+	if u.serviceForm.errorMsg != "" {
+		rows = append(rows, "", lipgloss.NewStyle().Foreground(colorError).Render("✗ "+u.serviceForm.errorMsg))
 	}
 
 	body := lipgloss.JoinVertical(lipgloss.Left, rows...)
