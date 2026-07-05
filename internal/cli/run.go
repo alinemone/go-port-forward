@@ -92,17 +92,18 @@ func runStartCommand(args []string) {
 		os.Exit(1)
 	}
 
-	// Start UI immediately
 	u := ui.NewUI(ctx, mgr, st)
 	program := tea.NewProgram(u)
 
-	// Start all services in parallel - they will appear in UI as they connect
+	// StartService only registers the service and spawns its own run loop, so
+	// this loop is fast and finishes before the TUI takes over the terminal.
+	// Runtime connect/error states are shown live inside the UI; printing to
+	// stdout after program.Run() would corrupt the screen.
 	for _, name := range serviceNames {
-		go func(serviceName string) {
-			if err := mgr.StartService(ctx, serviceName); err != nil {
-				fmt.Printf("Error starting '%s': %v\n", serviceName, err)
-			}
-		}(name)
+		if err := mgr.StartService(ctx, name); err != nil {
+			fmt.Printf("Error starting '%s': %v\n", name, err)
+			os.Exit(1)
+		}
 	}
 
 	// Always tear down every service before returning — even when the UI exits
