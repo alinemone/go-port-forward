@@ -1,7 +1,6 @@
 package manager
 
 import (
-	"os"
 	"strings"
 )
 
@@ -69,9 +68,4 @@ func normalizeErrorLine(line string) string {
 		line = line[:147] + "..."
 	}
 	return strings.Join(strings.Fields(line), " ")
-}
-
-func isStderrLoggingEnabled() bool {
-	raw := strings.TrimSpace(strings.ToLower(os.Getenv("PF_STDERR")))
-	return raw == "1" || raw == "true" || raw == "yes" || raw == "on"
 }

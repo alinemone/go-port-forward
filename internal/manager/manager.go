@@ -336,9 +336,6 @@ func (m *ServiceManager) runServiceOnce(ctx context.Context, svc *runningService
 	if err := cmd.Start(); err != nil {
 		message := fmt.Sprintf("Start failed: %v", err)
 		svc.setError(message)
-		if isStderrLoggingEnabled() {
-			fmt.Fprintf(os.Stderr, "[%s] ERROR: %v\n", svc.name, err)
-		}
 		return
 	}
 
@@ -565,11 +562,7 @@ func (m *ServiceManager) streamOutput(svc *runningService, reader io.Reader, isE
 		case lineKindHealthy:
 			svc.markHealthy()
 		case lineKindFatalError:
-			message := normalizeErrorLine(line)
-			svc.setError(message)
-			if isStderrLoggingEnabled() {
-				fmt.Fprintf(os.Stderr, "[%s] ERROR: %s\n", svc.name, message)
-			}
+			svc.setError(normalizeErrorLine(line))
 		}
 	}
 }
