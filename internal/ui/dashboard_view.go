@@ -94,6 +94,22 @@ func renderServiceTable(services []model.Service, selectedIndex, offset, maxVisi
 	rows := make([]string, 0, len(services)+2)
 	headerPrefix := "  "
 	nameCellWidth := maxNameLen + iconWidth
+
+	// ALIAS column (non-compact only): shows each service's in-cluster hostname
+	// in full so it can be read and copied. The column is shown only when the
+	// longest alias fits entirely in the room left inside the box (width-4
+	// usable) — on a narrower terminal it is dropped rather than truncated.
+	maxAliasLen := 0
+	for i := range services {
+		if w := lipgloss.Width(services[i].Alias); w > maxAliasLen {
+			maxAliasLen = w
+		}
+	}
+	usedBase := 2 + nameCellWidth + 2 + statusWidth + 2 + uptimeWidth + 2 + portWidth + 2 + restartWidth
+	roomForAlias := (width - 4) - usedBase - 2
+	aliasWidth := maxAliasLen
+	showAlias := !compact && maxAliasLen > 0 && roomForAlias >= maxAliasLen
+
 	headerLine := headerPrefix + padRightDisplayWidth("SERVICE", nameCellWidth) + fmt.Sprintf(
 		"  %-*s",
 		statusWidth, "STATUS",
@@ -107,6 +123,9 @@ func renderServiceTable(services []model.Service, selectedIndex, offset, maxVisi
 			portWidth, "PORT",
 			restartWidth, "RESTARTS",
 		)
+		if showAlias {
+			headerLine += fmt.Sprintf("  %-*s", aliasWidth, "ALIAS")
+		}
 	}
 	header := lipgloss.NewStyle().
 		Foreground(colorHeading).
@@ -201,6 +220,12 @@ func renderServiceTable(services []model.Service, selectedIndex, offset, maxVisi
 			row += "  " + styledPort
 		} else {
 			row += "  " + styledUptime + "  " + styledPort + "  " + styledRestarts
+			if showAlias {
+				styledAlias := lipgloss.NewStyle().
+					Foreground(nameColor).
+					Render(svc.Alias)
+				row += "  " + styledAlias
+			}
 		}
 		rows = append(rows, row)
 	}
@@ -347,7 +372,7 @@ func renderLogsContent(services []model.Service, maxWidth int) string {
 // helpLines builds the wrapped, balanced content rows for the help bar (without
 // the surrounding border). The height layout depends on len(helpLines(...)), so
 // renderHelp must render exactly these lines.
-func helpLines(width int, logScope string) []string {
+func helpLines(width int, logScope string, copyEnabled bool) []string {
 	if width < 60 {
 		width = 60
 	}
@@ -381,6 +406,16 @@ func helpLines(width int, logScope string) []string {
 			{"s", "stop"},
 			{"q", "quit"},
 		}
+	}
+
+	// The copy (y) hint appears only when cluster-host aliasing is on — no alias,
+	// no copy. Inserted right after the logs chip.
+	if copyEnabled {
+		withCopy := make([]chip, 0, len(chips)+1)
+		withCopy = append(withCopy, chips[:2]...)
+		withCopy = append(withCopy, chip{"y", "copy alias"})
+		withCopy = append(withCopy, chips[2:]...)
+		chips = withCopy
 	}
 
 	n := len(chips)
@@ -418,13 +453,13 @@ func helpLines(width int, logScope string) []string {
 	return balancedHelpLines(styled, widths, sepStyled, sepW, inner, minLines)
 }
 
-func renderHelp(width int, logScope string) string {
+func renderHelp(width int, logScope string, copyEnabled bool) string {
 	boxWidth := width
 	if boxWidth < 60 {
 		boxWidth = 60
 	}
 
-	help := strings.Join(helpLines(width, logScope), "\n")
+	help := strings.Join(helpLines(width, logScope, copyEnabled), "\n")
 
 	style := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).

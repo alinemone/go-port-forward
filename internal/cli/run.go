@@ -5,10 +5,13 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"syscall"
+	"time"
 	"unicode"
 
+	"github.com/alinemone/go-port-forward/internal/hostsfile"
 	"github.com/alinemone/go-port-forward/internal/manager"
 	"github.com/alinemone/go-port-forward/internal/storage"
 	"github.com/alinemone/go-port-forward/internal/ui"
@@ -111,12 +114,26 @@ func runStartCommand(args []string) {
 		}
 	}
 
+	// Keep the system hosts file in sync with the running services so each is
+	// reachable by its in-cluster FQDN on its local port — including services
+	// added later from the manage overlay. Best-effort: any failure here never
+	// blocks the forwards. Started before the TUI takes the screen so an
+	// elevation prompt (when needed) is visible.
+	clearAliases := startAliasReconciler(ctx, st, mgr)
+
 	// Always tear down every service before returning — even when the UI exits
 	// with an error or is killed by a signal — so no forwarder is left holding a
 	// port. StopAllServices is idempotent, so the in-UI quit path calling it too
 	// is harmless.
 	_, runErr := program.Run()
 	mgr.StopAllServices()
+
+	// Remove any hosts-file aliases we added directly. When an elevated helper
+	// applied them instead, clearAliases is a no-op — that helper removes them
+	// itself once this process exits.
+	if clearAliases != nil {
+		clearAliases()
+	}
 
 	// Final guarantee that quitting really released every forwarded port: any
 	// port still held here (e.g. by a forwarder that escaped the tree kill) is
@@ -129,6 +146,150 @@ func runStartCommand(args []string) {
 	if runErr != nil {
 		fmt.Printf("Error: %v\n", runErr)
 		os.Exit(1)
+	}
+}
+
+// startAliasReconciler keeps the system hosts file in sync with the set of
+// currently-running services while the TUI is up. For each running service it
+// derives the in-cluster FQDN (plus any custom aliases pinned by local port) and
+// adds a `127.0.0.1 <fqdn>` entry — so services started at launch AND those
+// added later from the manage overlay ('a') are all reachable by their cluster
+// hostname on their local port.
+//
+// It reconciles on a short timer, re-applying only when the running set changes.
+// When the hosts file isn't directly writable it launches one hidden, elevated
+// watcher (a single UAC prompt) that applies a control file this process keeps
+// updated, so dynamic adds/removes never trigger another prompt.
+//
+// Everything is best-effort: if aliasing is off, elevation is declined, or a
+// command yields no FQDN, the forwards run normally regardless. The returned
+// cleanup removes the aliases on shutdown (nil when aliasing is inactive).
+func startAliasReconciler(ctx context.Context, st *storage.Storage, mgr *manager.ServiceManager) func() {
+	if on, _ := st.HostAliasEnabled(); !on {
+		return nil
+	}
+	custom, _ := st.CustomHostAliases()
+
+	// Write directly when we already hold write access (elevated / root);
+	// otherwise drive a hidden elevated watcher through a control file.
+	direct := hostsfile.Writable()
+	var controlFile string
+	if !direct {
+		f, err := os.CreateTemp("", "pf-hosts-*.txt")
+		if err != nil {
+			fmt.Printf("⚠ Cluster aliases skipped: %v\n", err)
+			return nil
+		}
+		controlFile = f.Name()
+		f.Close()
+		if !elevateHostsWatch(controlFile) {
+			os.Remove(controlFile)
+			fmt.Println("⚠ Cluster aliases skipped (no elevation) — services still work on localhost:<port>.")
+			fmt.Println("  Disable this with 'pf alias off'.")
+			return nil
+		}
+	}
+
+	// writeControl atomically publishes the desired host list to the watcher's
+	// control file (temp + rename) so it never observes a half-written line.
+	writeControl := func(data string) {
+		tmp := controlFile + ".tmp"
+		if os.WriteFile(tmp, []byte(data), 0o644) == nil {
+			_ = os.Rename(tmp, controlFile)
+		}
+	}
+
+	stop := make(chan struct{})
+	noted := make(map[string]bool)
+	lastKey := ""
+
+	reconcile := func() {
+		type aliasEntry struct {
+			name, port string
+			hosts      []string
+		}
+		var entries []aliasEntry
+		var all []string
+		seen := make(map[string]bool)
+		live := make(map[string]bool)
+
+		for _, s := range mgr.ListServiceStates() {
+			localPort, _ := storage.ParsePortsFromCommand(s.Command)
+			var hosts []string
+			if fqdn, ok := storage.ClusterHostFromCommand(s.Command); ok {
+				hosts = append(hosts, fqdn)
+			}
+			if localPort != "" {
+				for _, h := range custom[localPort] {
+					if h = strings.ToLower(strings.TrimSpace(h)); h != "" {
+						hosts = append(hosts, h)
+					}
+				}
+			}
+			if len(hosts) == 0 {
+				continue
+			}
+			live[s.Name] = true
+			entries = append(entries, aliasEntry{name: s.Name, port: localPort, hosts: hosts})
+			for _, h := range hosts {
+				if !seen[h] {
+					seen[h] = true
+					all = append(all, h)
+				}
+			}
+		}
+
+		// Forget services that stopped, so a later re-add re-announces its alias.
+		for name := range noted {
+			if !live[name] {
+				delete(noted, name)
+			}
+		}
+
+		sort.Strings(all)
+		if key := strings.Join(all, "\n"); key != lastKey {
+			if direct {
+				_ = hostsfile.Apply(all)
+			} else {
+				writeControl(key)
+			}
+			lastKey = key
+		}
+
+		// Announce each newly-aliased service once, in its log pane.
+		for _, e := range entries {
+			if !noted[e.name] {
+				noted[e.name] = true
+				mgr.NoteAlias(e.name, e.hosts, e.port)
+			}
+		}
+	}
+
+	go func() {
+		ticker := time.NewTicker(700 * time.Millisecond)
+		defer ticker.Stop()
+		reconcile()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				reconcile()
+			}
+		}
+	}()
+
+	return func() {
+		close(stop)
+		if direct {
+			_ = hostsfile.Clear()
+		} else {
+			// Blank the control file so the watcher strips the block promptly; it
+			// also clears and exits on its own once this process exits.
+			writeControl("")
+		}
 	}
 }
 

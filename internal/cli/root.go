@@ -76,10 +76,30 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(
 		newAddCmd(), newListCmd(), newRunCmd(), newRaCmd(), newDeleteCmd(),
 		newRenameCmd(), newKubectlCmd(), newCleanupCmd(), newUpdateCmd(),
-		newEditCmd(), newIconCmd(), newThemeCmd(), newVersionCmd(),
-		newGroupCmd(), newCertCmd(), newCompletionCmd(),
+		newEditCmd(), newIconCmd(), newThemeCmd(), newAliasCmd(), newVersionCmd(),
+		newGroupCmd(), newCertCmd(), newCompletionCmd(), newHostsHelperCmd(),
 	)
 	return root
+}
+
+func newAliasCmd() *cobra.Command {
+	return &cobra.Command{
+		Use: "alias", Aliases: []string{"aliases"}, Short: "Toggle cluster-host aliases in the hosts file",
+		Args:              cobra.ArbitraryArgs,
+		ValidArgsFunction: completeAliasArgs,
+		Run:               func(_ *cobra.Command, args []string) { runAliasCommand(args) },
+	}
+}
+
+// newHostsHelperCmd is the hidden internal worker the unprivileged process
+// launches elevated to edit the protected system hosts file. Not user-facing.
+func newHostsHelperCmd() *cobra.Command {
+	return &cobra.Command{
+		Use: "__hosts", Hidden: true,
+		Args:               cobra.ArbitraryArgs,
+		DisableFlagParsing: true,
+		Run:                func(_ *cobra.Command, args []string) { runHostsHelper(args) },
+	}
 }
 
 func newAddCmd() *cobra.Command {

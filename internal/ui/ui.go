@@ -9,6 +9,7 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/atotto/clipboard"
 
 	"github.com/alinemone/go-port-forward/internal/model"
 	"github.com/alinemone/go-port-forward/internal/storage"
@@ -65,16 +66,19 @@ type UI struct {
 	logFilterSelected bool
 	spinnerFrame      int
 	tableOffset       int
+	aliasEnabled      bool // cluster-host aliasing is on → the copy (y) action is available
 }
 
 const uiTickInterval = 500 * time.Millisecond
 
 func NewUI(ctx context.Context, mgr Controller, store *storage.Storage) *UI {
+	aliasEnabled, _ := store.HostAliasEnabled()
 	return &UI{
-		manager:  mgr,
-		store:    store,
-		services: []model.Service{},
-		ctx:      ctx,
+		manager:      mgr,
+		store:        store,
+		services:     []model.Service{},
+		ctx:          ctx,
+		aliasEnabled: aliasEnabled,
 	}
 }
 
@@ -202,6 +206,11 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			u.refreshViewportContent()
 			u.viewport.GotoBottom()
 
+		case "y":
+			if u.aliasEnabled && u.cursorIndex < len(u.services) && len(u.services) > 0 {
+				return u, u.copyAlias(u.services[u.cursorIndex])
+			}
+
 		default:
 			u.viewport, cmd = u.viewport.Update(msg)
 		}
@@ -263,6 +272,18 @@ func (u *UI) shutdownCmd() tea.Cmd {
 		u.manager.StopAllServices()
 		return shutdownDoneMsg{}
 	}
+}
+
+// copyAlias yanks the selected service's cluster-host alias to the system
+// clipboard, reporting the result in the status line.
+func (u *UI) copyAlias(svc model.Service) tea.Cmd {
+	if svc.Alias == "" {
+		return u.setStatus("○ No cluster alias for " + svc.Name + " — enable it with 'pf alias on'")
+	}
+	if err := clipboard.WriteAll(svc.Alias); err != nil {
+		return u.setStatus("✗ Copy failed: " + err.Error())
+	}
+	return u.setStatus("✓ Copied " + svc.Alias)
 }
 
 func (u *UI) setStatus(text string) tea.Cmd {
@@ -336,7 +357,7 @@ func (u *UI) viewContent() string {
 		sections = append(sections, lipgloss.NewStyle().Foreground(statusColor).Render(u.editStatus))
 	}
 
-	sections = append(sections, renderHelp(u.width, u.logScopeLabel()))
+	sections = append(sections, renderHelp(u.width, u.logScopeLabel(), u.aliasEnabled))
 	return lipgloss.JoinVertical(lipgloss.Left, sections...)
 }
 

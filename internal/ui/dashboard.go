@@ -107,7 +107,7 @@ func (u *UI) ensureViewportSize() {
 // bar can wrap to multiple rows on narrow terminals, so this must be measured,
 // not assumed, or the bottom border gets clipped off-screen.
 func (u *UI) chromeBelowLog() int {
-	h := len(helpLines(u.width, u.logScopeLabel())) + 2 // help box border
+	h := len(helpLines(u.width, u.logScopeLabel(), u.aliasEnabled)) + 2 // help box border
 	if u.editStatus != "" {
 		h++
 	}

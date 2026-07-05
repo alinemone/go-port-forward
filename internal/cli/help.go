@@ -77,6 +77,7 @@ func showUsage() {
 	uRow(26, "edit", "Edit all services and groups as JSON")
 	uRow(26, "theme [name|list]", "Change the color theme")
 	uRow(26, "icon [on|off|status]", "Toggle service icons")
+	uRow(26, "alias [on|off|clear]", "Toggle cluster-host aliases in the hosts file")
 	uRow(26, "completion install", "Install shell tab-completion")
 	uRow(26, "u, update [--yes|--force]", "Update pf to the latest release")
 	uRow(26, "v, version", "Show the installed version")

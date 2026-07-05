@@ -34,6 +34,7 @@ type runningService struct {
 	lastError     string
 	startTime     time.Time
 	restartCount  int
+	alias         string
 	healthySince  time.Time
 	lastHealthy   time.Time
 	lastRunStable bool
@@ -83,6 +84,7 @@ func (s *runningService) snapshot() model.Service {
 		LastError:    s.lastError,
 		StartTime:    s.startTime,
 		RestartCount: s.restartCount,
+		Alias:        s.alias,
 		Logs:         logsCopy,
 	}
 }
@@ -542,6 +544,33 @@ func (m *ServiceManager) StopAllServices() {
 	killProcessTrees(procs)
 	awaitServiceLoops(services, shutdownGraceTimeout)
 	ensurePortsFree(ports)
+}
+
+// NoteAlias surfaces, in a running service's log pane, that it is also reachable
+// by one or more cluster/custom hostnames on its local port. Called only after
+// the hosts-file entries are actually applied, so it never advertises an alias
+// that isn't live. A no-op if the service isn't currently running or hosts is
+// empty.
+func (m *ServiceManager) NoteAlias(name string, hosts []string, localPort string) {
+	if len(hosts) == 0 {
+		return
+	}
+	m.mu.RLock()
+	svc, exists := m.services[name]
+	m.mu.RUnlock()
+	if !exists {
+		return
+	}
+
+	svc.mu.Lock()
+	svc.alias = hosts[0] // primary hostname shown in the table / yanked with `y`
+	svc.mu.Unlock()
+
+	reachable := make([]string, len(hosts))
+	for i, h := range hosts {
+		reachable[i] = h + ":" + localPort
+	}
+	svc.appendLog("✓ cluster alias active — also reachable at "+strings.Join(reachable, ", "), false)
 }
 
 func (m *ServiceManager) ListServiceStates() []model.Service {

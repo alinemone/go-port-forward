@@ -9,6 +9,7 @@ Modern CLI tool for managing multiple port-forward connections with real-time mo
 - 🔄 **Auto-Reconnection** - Automatically reconnects on failure
 - 🧹 **Port Cleanup** - Automatically kills conflicting processes
 - 🔐 **Certificate Support** - Built-in P12 certificate handling for kubectl
+- 🌐 **Cluster-Host Aliases** - Reach a forwarded service by its in-cluster FQDN locally, so your prod-style config needs no editing
 - 📊 **Real-time Monitoring** - Live status updates
 - 🛡️ **Graceful Shutdown** - Proper cleanup on exit or Ctrl+C
 - 📦 **Single Binary** - No external dependencies
@@ -180,6 +181,7 @@ pf list
 | `cert`  |       | Manage certificates (add/list/remove) |
 | `icon`  |       | Toggle Nerd Font icons (`on`/`off`/`status`) |
 | `theme` |       | Switch color theme (`default`/`ocean`/`sunset`) |
+| `alias` |       | Toggle cluster-host aliases in the hosts file (`on`/`off`/`status`/`clear`) |
 | `update`| `u`   | Update pf to the latest GitHub release |
 | `completion` |  | Generate / install shell completion (see below) |
 | `version`  | `v`  | Show build version details |
@@ -471,6 +473,90 @@ theme that only sets, say, `accent` and `heading` is valid — the rest is inher
 > Service-health colors (green/yellow/red for healthy/connecting/error) are intentionally
 > fixed across every theme so status always reads the same.
 
+### 🌐 Cluster-Host Aliases
+
+Reach a port-forwarded service by the **exact in-cluster hostname it has in
+production** — locally — so an app configured with the cluster address needs no
+`.env` change.
+
+When enabled, running a `svc/` (or `deploy/`, `statefulset/`, …) port-forward
+adds a line to your system hosts file:
+
+```
+127.0.0.1  operation-dastyar-psql-postgresql-ha.prod-operation.svc.cluster.local
+```
+
+The hostname is derived automatically from the command: `svc/NAME` (or a
+Deployment / StatefulSet / ReplicaSet / DaemonSet target) plus `-n NAMESPACE`
+become `NAME.NAMESPACE.svc.cluster.local`. Bare `pod/…` forwards are skipped
+(pod names aren't stable). A command whose namespace comes only from the kube
+context is skipped too.
+
+> **About the port:** a hosts file maps a name to an IP only — it can't carry a
+> port. So you reach the service at `<fqdn>:<localPort>` — i.e. the **local**
+> port of your forward (`1116` in `1116:5432`), not the remote `5432`. The host
+> matches production exactly; the port is your local one.
+
+**It is OFF by default** (it edits a protected system file). Turn it on:
+
+```bash
+pf alias on        # enable
+pf alias off       # disable
+pf alias           # status (also: pf alias status)
+pf alias clear     # remove any leftover pf-managed block from the hosts file
+```
+
+**Elevation, without a new terminal.** Editing the hosts file needs
+Administrator (Windows) or root (Unix). pf handles it for you: on `pf run` it
+launches a hidden helper via **one UAC prompt** (Windows) or **one `sudo`
+prompt** (Unix) that keeps the aliases in sync while the TUI runs unelevated in
+your current terminal, and removes them automatically when you quit — even on
+Ctrl+C or a hard kill. Services added later from the manage overlay (`a`) are
+aliased too, with **no extra prompt**. If you decline the prompt, the
+port-forward still works normally on `localhost:<port>` — nothing breaks.
+
+In the TUI, an **ALIAS** column shows each service's hostname (hidden on narrow
+terminals), and pressing **`y`** copies the selected service's alias to your
+clipboard.
+
+Example:
+
+```bash
+pf alias on
+pf run dastyar-pg          # approve the one elevation prompt
+# your local app can now connect to the production address:
+#   operation-dastyar-psql-postgresql-ha.prod-operation.svc.cluster.local:1116
+```
+
+#### Customizing aliases
+
+Besides the auto-derived FQDN, you can pin **custom alias hostnames per local
+port** under `hostAlias.ports` in `~/.pf/services.json`. The key is the
+service's **local** port; every listed hostname is added alongside the
+auto-derived one:
+
+```json
+{
+  "hostAlias": {
+    "enable": true,
+    "ports": {
+      "1116": [
+        "operation-dastyar-psql-postgresql-ha.prod-operation.svc.cluster.local",
+        "my-db.local"
+      ]
+    }
+  },
+  "services": {
+    "dastyar-pg": "kubectl -n prod-operation port-forward svc/operation-dastyar-psql-postgresql-ha 1116:5432"
+  },
+  "groups": {}
+}
+```
+
+With the above, the service on local port `1116` is reachable at both
+`…svc.cluster.local:1116` and `my-db.local:1116`. `pf alias on` sets
+`hostAlias.enable` for you; you can also flip it by hand as shown.
+
 ### Cleanup Stuck Ports
 
 ```bash
@@ -492,7 +578,8 @@ When running services:
 - **Ctrl+R** - Restart all services
 - **s** - Stop the selected service
 - **a** - Add another stored service to the running set
-- **e** - Bulk-edit configuration in `$EDITOR`
+- **c** - Bulk-edit configuration in `$EDITOR`
+- **y** - Copy the selected service's cluster-host alias (shown only when `pf alias` is on)
 - **q** / **Esc** / **Ctrl+C** - Quit and stop all services
 
 ## 📂 File Locations
@@ -531,6 +618,7 @@ When running services:
 │   │   ├── proc_unix.go     → Unix process groups / port cleanup
 │   │   └── proc_windows.go  → Windows process groups / port cleanup
 │   ├── ui/ui.go             → Terminal UI (Bubbletea)
+│   ├── hostsfile/           → System hosts-file managed-block sync (cluster aliases)
 │   └── cert/
 │       ├── p12.go           → P12 certificate extraction
 │       └── manager.go       → Certificate management

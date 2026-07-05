@@ -26,6 +26,7 @@ type Service struct {
 	LastError    string
 	StartTime    time.Time
 	RestartCount int
+	Alias        string // in-cluster hostname aliased to localhost (empty if none active)
 	Logs         []LogEntry
 }
 

@@ -30,6 +30,22 @@ type IconConfig struct {
 	Group  *IconSpec           `json:"group,omitempty"`
 }
 
+// HostAliasConfig controls the optional cluster-host aliases feature. It is OFF
+// by default (a nil *HostAliasConfig means disabled) because it edits a
+// protected system file; turn it on with `pf alias on`. When enabled, running a
+// `svc/NAME` port-forward also adds a `127.0.0.1 <fqdn>` line to the system
+// hosts file so the service is reachable by its in-cluster production hostname
+// on its local port.
+//
+// Ports lets a user pin extra custom alias hostnames, keyed by the service's
+// LOCAL port, e.g. {"ports": {"1116": ["my-db.local"]}} — those hostnames are
+// added alongside (or instead of) the auto-derived cluster FQDN for whichever
+// service forwards that local port.
+type HostAliasConfig struct {
+	Enable bool                `json:"enable"`
+	Ports  map[string][]string `json:"ports,omitempty"`
+}
+
 // ThemeSpec is a user-defined color palette read from config. Every field is
 // optional; any omitted color falls back to the built-in "default" theme's
 // value, so a partial theme that only sets, say, "accent" is valid. Selected by
@@ -47,12 +63,13 @@ type ThemeSpec struct {
 }
 
 type StorageData struct {
-	Services map[string]string    `json:"services"`
-	Groups   map[string][]string  `json:"groups"`
-	Icon     *IconConfig          `json:"icon,omitempty"`
-	Theme    string               `json:"theme,omitempty"`
-	Themes   map[string]ThemeSpec `json:"themes,omitempty"`
-	Legacy   map[string]string    `json:"-"`
+	Services  map[string]string    `json:"services"`
+	Groups    map[string][]string  `json:"groups"`
+	Icon      *IconConfig          `json:"icon,omitempty"`
+	HostAlias *HostAliasConfig     `json:"hostAlias,omitempty"`
+	Theme     string               `json:"theme,omitempty"`
+	Themes    map[string]ThemeSpec `json:"themes,omitempty"`
+	Legacy    map[string]string    `json:"-"`
 }
 
 type Storage struct {
@@ -231,6 +248,47 @@ func (s *Storage) IconSet() (*icons.Set, bool, error) {
 	return icons.NewSet(ports, group), data.Icon.Enable, nil
 }
 
+// HostAliasEnabled reports whether cluster-host aliasing is on. It defaults to
+// OFF (a config that has never touched the setting has a nil *HostAliasConfig)
+// because the feature edits a protected system file; enable it with
+// {"hostAlias": {"enable": true}} or `pf alias on`.
+func (s *Storage) HostAliasEnabled() (bool, error) {
+	data, err := s.readStorage()
+	if err != nil {
+		return false, err
+	}
+	return data.HostAlias != nil && data.HostAlias.Enable, nil
+}
+
+// SetHostAliasEnabled turns cluster-host aliasing on or off, preserving the rest
+// of the config. Writing an explicit value pins the choice so the default-on
+// behaviour no longer applies.
+func (s *Storage) SetHostAliasEnabled(enabled bool) error {
+	data, err := s.readStorage()
+	if err != nil {
+		return err
+	}
+	if data.HostAlias == nil {
+		data.HostAlias = &HostAliasConfig{}
+	}
+	data.HostAlias.Enable = enabled
+	return s.writeStorage(data)
+}
+
+// CustomHostAliases returns the user-defined alias hostnames keyed by local
+// port (may be nil). These are merged with auto-derived cluster FQDNs when
+// building the hosts-file block.
+func (s *Storage) CustomHostAliases() (map[string][]string, error) {
+	data, err := s.readStorage()
+	if err != nil {
+		return nil, err
+	}
+	if data.HostAlias == nil {
+		return nil, nil
+	}
+	return data.HostAlias.Ports, nil
+}
+
 func (s *Storage) EnsureExists() error {
 	if s.filePath == "" {
 		return nil
@@ -258,7 +316,7 @@ func (s *Storage) readStorage() (*StorageData, error) {
 	}
 
 	var storageData StorageData
-	if err := json.Unmarshal(data, &storageData); err == nil && (storageData.Services != nil || storageData.Groups != nil || storageData.Icon != nil || storageData.Theme != "" || storageData.Themes != nil) {
+	if err := json.Unmarshal(data, &storageData); err == nil && (storageData.Services != nil || storageData.Groups != nil || storageData.Icon != nil || storageData.HostAlias != nil || storageData.Theme != "" || storageData.Themes != nil) {
 		if storageData.Services == nil {
 			storageData.Services = make(map[string]string)
 		}
@@ -454,6 +512,35 @@ func ParsePortsFromCommand(command string) (local, remote string) {
 		return matches[1], matches[2]
 	}
 	return "", ""
+}
+
+var (
+	// targetRegex captures the workload NAME from a port-forward target. It
+	// accepts a Service directly and the common workloads that conventionally
+	// share their Service's name (Deployment, StatefulSet, ReplicaSet,
+	// DaemonSet), since the in-cluster address apps use is the Service FQDN. Bare
+	// pods are excluded: their names are non-deterministic, so NAME.NS.svc… would
+	// be meaningless.
+	targetRegex    = regexp.MustCompile(`(?:svc|services?|deployments?|deploy|statefulsets?|sts|replicasets?|rs|daemonsets?|ds)/([a-z0-9][a-z0-9-]*)`)
+	namespaceRegex = regexp.MustCompile(`(?:^|\s)(?:--namespace|-n)(?:[=\s]+)([a-z0-9][a-z0-9-]*)`)
+)
+
+// ClusterHostFromCommand derives the in-cluster Service FQDN a port-forward
+// target maps to — NAME.NAMESPACE.svc.cluster.local — so it can be aliased to
+// localhost in the hosts file. It returns ok=false (and the caller silently
+// skips the service) when the command has no namespaced Service/workload target,
+// e.g. a bare `pod/…` forward or one whose namespace comes only from the kube
+// context.
+func ClusterHostFromCommand(command string) (host string, ok bool) {
+	target := targetRegex.FindStringSubmatch(command)
+	if len(target) != 2 {
+		return "", false
+	}
+	ns := namespaceRegex.FindStringSubmatch(command)
+	if len(ns) != 2 {
+		return "", false
+	}
+	return target[1] + "." + ns[1] + ".svc.cluster.local", true
 }
 
 func (s *Storage) AddGroup(name string, services []string) error {
