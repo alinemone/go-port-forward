@@ -1,5 +1,15 @@
 # pf — Review & Refactor Plan (V3 branch)
 
+> **وضعیت (2026-07-05): همه فازها اجرا شد. ✅**
+> - Phase A ✅ `a20b947` — تقسیم ui.go به ۱۰ فایل
+> - Phase C2 ✅ `a274b59` — انتقال CLI به `internal/cli`؛ فقط `main.go` در `cmd/pf`
+> - Phase B ✅ `838d03e` — سه state-struct، تزریق storage با `NewUI(ctx, mgr, store)`، rename ها، `normalizeKeyToken`
+> - Phase C1 ✅ `5a90761` — استارت همگام سرویس‌ها قبل از TUI (حذف println وسط TUI)
+> - Phase D ✅ `a6ecfaf` — wrapText بر اساس display-width + رفع false-positive الگوی `format`
+> - اضافه ✅ `45a86b5` — رفع race واقعی در `TestEnsurePortFreeReleasesHeldPort` (پروبِ والد پورت را می‌دزدید؛ حالا با خط READY همگام می‌شود)
+> - P3 اضافه: `st := storage.NewStorage()` در `manage.go` (هندلر حذف) هم `u.store` شد — جمعاً ۸ محل.
+> - باقی‌مانده اختیاری: امضای `RestartService` که همیشه nil برمی‌گرداند (Phase D-3).
+
 > این سند self-contained است: هر مدل/سشن دیگری باید بتواند فقط با خواندن همین فایل، ریفکتور را دقیق اجرا کند.
 > **قانون طلایی: هیچ تغییر رفتاری (behavior change) مجاز نیست مگر در Phase D که صراحتاً «fix» است. بعد از هر فاز: `go build ./... && go vet ./... && go test ./...` باید سبز باشد، سپس یک commit جدا.**
 
