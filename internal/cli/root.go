@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"fmt"
@@ -11,7 +11,32 @@ import (
 
 	"github.com/alinemone/go-port-forward/internal/cert"
 	"github.com/alinemone/go-port-forward/internal/storage"
+	"github.com/alinemone/go-port-forward/internal/theme"
+	"github.com/alinemone/go-port-forward/internal/ui"
+	"github.com/alinemone/go-port-forward/internal/updater"
 )
+
+// Execute is the single entry point of the pf CLI: it performs process-wide
+// startup (stale-updater cleanup, config bootstrap, theme selection) and then
+// runs the Cobra command tree. cmd/pf/main.go is a thin wrapper around it.
+func Execute() error {
+	updater.CleanupStaleArtifacts()
+
+	st := storage.NewStorage()
+	_ = st.EnsureExists()
+
+	// Register any user-defined palettes, then load the saved color theme and
+	// apply it process-wide before any rendering. Registration must come first so
+	// a saved custom theme name resolves just like a built-in.
+	_ = st.RegisterCustomThemes()
+	if name, err := st.ThemeName(); err == nil {
+		theme.Set(name)
+		applyCLITheme()
+		ui.ApplyTheme()
+	}
+
+	return newRootCmd().Execute()
+}
 
 // newRootCmd builds the full Cobra command tree. Each command is a thin wrapper
 // around an existing run* function (business logic is unchanged); Cobra adds
