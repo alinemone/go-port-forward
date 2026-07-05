@@ -557,6 +557,54 @@ With the above, the service on local port `1116` is reachable at both
 `…svc.cluster.local:1116` and `my-db.local:1116`. `pf alias on` sets
 `hostAlias.enable` for you; you can also flip it by hand as shown.
 
+#### Multiple clusters (`--context`)
+
+Aliasing works across clusters automatically — the hostname is derived from each
+command's own `-n <namespace>` and target, independent of which cluster or
+`--context` it uses. Just add one service per cluster, each with `--context` and
+a **distinct local port**, and run them together:
+
+```json
+{
+  "hostAlias": { "enable": true },
+  "services": {
+    "prod-pg":  "kubectl --context prod    -n prod-app    port-forward svc/postgres 15432:5432",
+    "stage-pg": "kubectl --context staging -n staging-app port-forward svc/postgres 25432:5432"
+  }
+}
+```
+
+Both get their own hosts entry, reachable on their local port:
+
+```
+127.0.0.1  postgres.prod-app.svc.cluster.local     →  :15432  (prod)
+127.0.0.1  postgres.staging-app.svc.cluster.local  →  :25432  (staging)
+```
+
+**Same namespace + service name in both clusters?** The auto-derived FQDN is then
+identical — which still works, because the hosts entry only maps the name to
+`127.0.0.1` and the **local port** decides which cluster you reach
+(`…svc.cluster.local:15432` vs `:25432`). If you'd rather have a distinct
+hostname per cluster, pin them with custom aliases keyed by local port:
+
+```json
+{
+  "hostAlias": {
+    "enable": true,
+    "ports": {
+      "15432": ["postgres.prod.svc.cluster.local"],
+      "25432": ["postgres.staging.svc.cluster.local"]
+    }
+  }
+}
+```
+
+> **Run multi-cluster services in a single `pf run`.** The pf-managed hosts block
+> is shared, so two **separate, concurrent** `pf run` sessions would overwrite
+> each other's aliases. Run them together instead — `pf run prod-pg,stage-pg` or
+> a group (`pf group add multi prod-pg,stage-pg && pf run multi`) — so one
+> reconciler manages every alias at once.
+
 ### Cleanup Stuck Ports
 
 ```bash
