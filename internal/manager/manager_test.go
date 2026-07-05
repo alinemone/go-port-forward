@@ -28,8 +28,21 @@ func TestMain(m *testing.M) {
 		os.Exit(0)
 	}
 	if port := os.Getenv("PF_HOLDPORT"); port != "" {
-		ln, err := net.Listen("tcp", "127.0.0.1:"+port)
+		// Retry the bind: the waiting parent polls isPortFree, whose probe
+		// briefly binds this very port, so a single attempt can collide with a
+		// probe window and die before the parent ever sees the port held.
+		var ln net.Listener
+		var err error
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			ln, err = net.Listen("tcp", "127.0.0.1:"+port)
+			if err == nil || time.Now().After(deadline) {
+				break
+			}
+			time.Sleep(25 * time.Millisecond)
+		}
 		if err != nil {
+			fmt.Println("HOLDPORT bind failed:", err)
 			os.Exit(1)
 		}
 		defer ln.Close()

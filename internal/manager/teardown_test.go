@@ -1,11 +1,13 @@
 package manager
 
 import (
+	"bufio"
 	"fmt"
 	"net"
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -67,6 +69,11 @@ func TestEnsurePortFreeReleasesHeldPort(t *testing.T) {
 	}
 	child := exec.Command(self)
 	child.Env = append(os.Environ(), "PF_HOLDPORT="+port)
+	childOut, err := child.StdoutPipe()
+	if err != nil {
+		t.Fatalf("stdout pipe: %v", err)
+	}
+	child.Stderr = child.Stdout
 	if err := child.Start(); err != nil {
 		t.Fatalf("start holder: %v", err)
 	}
@@ -75,16 +82,27 @@ func TestEnsurePortFreeReleasesHeldPort(t *testing.T) {
 		child.Wait()
 	}()
 
-	// Wait until the child has actually bound the port.
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if !isPortFree(port) {
-			break
+	// Wait for the child's READY line rather than probing the port ourselves:
+	// isPortFree binds the port to test it, and a parent-side probe can collide
+	// with the child's own bind and kill it before it ever holds the port.
+	ready := make(chan error, 1)
+	go func() {
+		scanner := bufio.NewScanner(childOut)
+		for scanner.Scan() {
+			if strings.Contains(scanner.Text(), "READY") {
+				ready <- nil
+				return
+			}
 		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	if isPortFree(port) {
-		t.Fatalf("child never bound port %s", port)
+		ready <- fmt.Errorf("child exited before binding (no READY line)")
+	}()
+	select {
+	case err := <-ready:
+		if err != nil {
+			t.Fatalf("child never bound port %s: %v", port, err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatalf("timed out waiting for child to bind port %s", port)
 	}
 
 	ensurePortFree(port)
