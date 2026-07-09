@@ -1,5 +1,7 @@
 # pf - Port Forward Manager v2.*
 
+**Language:** [🇬🇧 English](README.md) • [🇮🇷 فارسی](README.fa.md)
+
 Modern CLI tool for managing multiple port-forward connections with real-time monitoring and certificate support.
 
 ## ✨ Features
