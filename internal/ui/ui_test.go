@@ -55,8 +55,8 @@ func TestHelpLinesFitResponsiveWidthsAndShowClearLogs(t *testing.T) {
 			t.Fatalf("width %d: expected wrapped help, got %d line(s)", width, len(lines))
 		}
 		joined := strings.Join(lines, "\n")
-		if !strings.Contains(joined, "x") || !strings.Contains(joined, "clear") {
-			t.Fatalf("width %d: clear-log shortcut missing: %q", width, joined)
+		if !strings.Contains(joined, "Ctrl+L") || !strings.Contains(joined, "clear logs") {
+			t.Fatalf("width %d: combined log controls missing: %q", width, joined)
 		}
 		inner := width - 4
 		for _, line := range lines {
@@ -76,8 +76,11 @@ func TestHelpHasOnlyOuterBorderAndKeyDescriptionGrid(t *testing.T) {
 	if strings.ContainsAny(plain, "┼├┤┬┴") {
 		t.Fatalf("help must not have internal grid borders: %q", plain)
 	}
-	if !strings.Contains(plain, "l: logs ALL") || !strings.Contains(plain, "x: clear logs") {
+	if !strings.Contains(plain, "L/Ctrl+L: view / clear logs") {
 		t.Fatalf("expected key: description format: %q", plain)
+	}
+	if !strings.Contains(plain, "Ctrl+R: restart all") || strings.Contains(plain, "^r:") {
+		t.Fatalf("expected readable Ctrl shortcut label: %q", plain)
 	}
 	if len(strings.Split(plain, "\n")) < 2 {
 		t.Fatalf("narrow help should use multiple grid rows: %q", plain)
@@ -174,8 +177,11 @@ func TestManageOverlayFillsTerminalAndAnchorsResponsiveHelp(t *testing.T) {
 			if !strings.HasPrefix(ansi.Strip(lines[len(lines)-1]), "╰") {
 				t.Fatalf("help is not anchored to terminal bottom: %q", ansi.Strip(lines[len(lines)-1]))
 			}
-			if !strings.Contains(plain, "type: search") || !strings.Contains(plain, "Space: select") {
+			if !strings.Contains(plain, "type: search list") || !strings.Contains(plain, "Space: select / unselect") {
 				t.Fatalf("manage help does not use dashboard key grid: %q", plain)
+			}
+			if !strings.Contains(plain, "Ctrl+N: create Service") || strings.Contains(plain, "^n:") {
+				t.Fatalf("manage help must spell out Ctrl shortcuts: %q", plain)
 			}
 			for _, line := range lines {
 				if got := lipgloss.Width(line); got > u.width {

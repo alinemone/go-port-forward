@@ -61,7 +61,7 @@ type manageState struct {
 	errorMsg          string
 	infoMsg           string // transient success/info line (e.g. "Started N service(s)")
 	searchQuery       string // live filter query for the groups+services list
-	showNewPrompt     bool   // ^n → choose group vs service
+	showNewPrompt     bool   // Ctrl+N → choose group vs service
 }
 
 func (u *UI) enterManageMode(focusServices bool) {

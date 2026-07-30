@@ -146,13 +146,13 @@ func (u *UI) renderManageOverlay() string {
 		case rowHeaderServices:
 			rows = append(rows, lipgloss.NewStyle().Foreground(colorHeading).Bold(true).Render("SERVICES"))
 		case rowEmptyGroups:
-			text := "  (no groups — ^n to create)"
+			text := "  (no groups — Ctrl+N to create)"
 			if u.manage.searchQuery != "" {
 				text = "  (no matching groups)"
 			}
 			rows = append(rows, lipgloss.NewStyle().Foreground(colorMuted).Italic(true).Render(text))
 		case rowEmptyServices:
-			text := "  (no services — ^n to create)"
+			text := "  (no services — Ctrl+N to create)"
 			if u.manage.searchQuery != "" {
 				text = "  (no matching services)"
 			}
@@ -190,15 +190,15 @@ func (u *UI) renderManageOverlay() string {
 
 func (u *UI) renderManageHelp(width int) string {
 	return renderHelpBox(width, helpItemLines(width, []helpItem{
-		{"type", "search"},
-		{"↑↓", "navigate"},
-		{"Space", "select"},
-		{"Enter", "run"},
-		{"^n", "new"},
-		{"^e", "edit"},
-		{"^d", "delete"},
-		{"^c", "config"},
-		{"Esc", "clear/close"},
+		{"type", "search list"},
+		{"↑↓", "choose item"},
+		{"Space", "select / unselect"},
+		{"Enter", "start selected"},
+		{"Ctrl+N", "create Service"},
+		{"Ctrl+E", "edit current"},
+		{"Ctrl+D", "delete current"},
+		{"Ctrl+C", "edit config file"},
+		{"Esc", "clear search / back"},
 	}))
 }
 

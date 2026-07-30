@@ -394,44 +394,41 @@ func helpLines(width int, logScope string, copyEnabled bool) []string {
 	if width < 50 {
 		logScope = truncateRunes(logScope, 8)
 		items = []helpItem{
-			{"↑↓", "select"},
-			{"l", "logs " + logScope},
-			{"x", "clear logs"},
-			{"a", "manage"},
-			{"c", "config"},
-			{"r", "restart"},
-			{"^r", "restart all"},
-			{"s", "stop"},
-			{"q", "quit"},
+			{"↑↓", "choose service"},
+			{"L/Ctrl+L", "view / clear logs"},
+			{"a", "add/edit services"},
+			{"c", "edit config"},
+			{"r", "restart selected"},
+			{"Ctrl+R", "restart all"},
+			{"s", "stop selected"},
+			{"q", "quit & stop all"},
 		}
 	} else if width < 90 {
 		items = []helpItem{
-			{"↑↓", "select"},
-			{"l", "logs " + logScope},
-			{"x", "clear logs"},
-			{"a", "add/edit"},
-			{"c", "config"},
-			{"r", "restart"},
-			{"^r", "restart all"},
-			{"s", "stop"},
-			{"q", "quit"},
+			{"↑↓", "choose service"},
+			{"L / Ctrl+L", "switch view / clear logs (now " + logScope + ")"},
+			{"a", "add/edit services"},
+			{"c", "edit config file"},
+			{"r", "restart selected"},
+			{"Ctrl+R", "restart all"},
+			{"s", "stop selected"},
+			{"q", "quit & stop all"},
 		}
 	} else {
 		items = []helpItem{
-			{"↑↓/j/k", "select service"},
-			{"l", "log scope " + logScope},
-			{"x", "clear logs"},
-			{"a", "add/edit"},
-			{"c", "config"},
-			{"r", "restart"},
-			{"^r", "restart all"},
-			{"s", "stop"},
-			{"q", "quit"},
+			{"↑↓/j/k", "choose service"},
+			{"L / Ctrl+L", "switch view / clear logs (now " + logScope + ")"},
+			{"a", "add/edit services"},
+			{"c", "edit config file"},
+			{"r", "restart selected"},
+			{"Ctrl+R", "restart all"},
+			{"s", "stop selected"},
+			{"q", "quit & stop all"},
 		}
 	}
 
 	// The copy (y) hint appears only when cluster-host aliasing is on — no alias,
-	// no copy. Inserted right after the logs chip.
+	// no copy. Inserted right after the combined log-controls cell.
 	if copyEnabled {
 		withCopy := make([]helpItem, 0, len(items)+1)
 		withCopy = append(withCopy, items[:2]...)

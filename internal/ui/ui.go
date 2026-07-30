@@ -209,7 +209,7 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			u.refreshViewportContent()
 			u.viewport.GotoBottom()
 
-		case "x":
+		case "ctrl+l":
 			scope := ""
 			label := "all services"
 			if u.logFilterSelected && u.cursorIndex >= 0 && u.cursorIndex < len(u.services) {
