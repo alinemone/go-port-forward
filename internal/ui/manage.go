@@ -482,22 +482,23 @@ func (u *UI) runManageSelection() bool {
 	return true
 }
 
-func (u *UI) manageVisibleRows() int {
-	if u.height <= 0 {
+func (u *UI) manageVisibleRows(dataHeight int) int {
+	if dataHeight <= 0 {
 		return 30
 	}
-	v := u.height - 9 // chrome: title + search line + box border + action chips
-	if v < 5 {
-		v = 5
+	// Border, title, and search consume four lines. If the list is truncated,
+	// reserve one more line for its range indicator.
+	v := dataHeight - 4
+	if v < 1 {
+		v = 1
 	}
-	if v > 30 {
-		v = 30
+	if len(u.manage.rows) > v && v > 1 {
+		v--
 	}
 	return v
 }
 
-func (u *UI) ensureManageVisible() {
-	visible := u.manageVisibleRows()
+func (u *UI) ensureManageVisible(visible int) {
 	if len(u.manage.rows) <= visible {
 		u.manage.offset = 0
 		return

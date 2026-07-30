@@ -88,11 +88,24 @@ func (u *UI) renderManageOverlay() string {
 	if width <= 0 {
 		width = 120
 	}
-	if width < 60 {
-		width = 60
+	if width < 12 {
+		width = 12
 	}
 
 	running := u.runningNameSet()
+	helpBox := u.renderManageHelp(width)
+	contextPanel := u.renderManageContext(width)
+	dataHeight := 0
+	if u.height > 0 {
+		contextHeight := 0
+		if contextPanel != "" {
+			contextHeight = lipgloss.Height(contextPanel)
+		}
+		dataHeight = u.height - lipgloss.Height(helpBox) - contextHeight
+		if dataHeight < 4 {
+			dataHeight = 4
+		}
+	}
 
 	maxNameLen := 7
 	for _, n := range u.manage.groupNames {
@@ -109,8 +122,8 @@ func (u *UI) renderManageOverlay() string {
 		maxNameLen = 30
 	}
 
-	u.ensureManageVisible()
-	visible := u.manageVisibleRows()
+	visible := u.manageVisibleRows(dataHeight)
+	u.ensureManageVisible(visible)
 	start := u.manage.offset
 	end := start + visible
 	if end > len(u.manage.rows) {
@@ -157,47 +170,26 @@ func (u *UI) renderManageOverlay() string {
 	}
 
 	table := lipgloss.JoinVertical(lipgloss.Left, rows...)
-	overlayBox := lipgloss.NewStyle().
+	overlayStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colorBorder).
 		Padding(0, 1).
-		Width(width - 2).
-		Render(table)
+		Width(width)
+	if dataHeight > 0 {
+		overlayStyle = overlayStyle.Height(dataHeight)
+	}
+	overlayBox := overlayStyle.Render(table)
 
 	sections := []string{overlayBox}
-
-	switch {
-	case u.manage.showNewPrompt:
-		promptText := lipgloss.NewStyle().Foreground(colorAccentAlt).Bold(true).Render("Create new —")
-		promptKeys := renderActionChips([][2]string{{"g", "group"}, {"s", "service"}, {"esc", "cancel"}})
-		promptBody := lipgloss.JoinVertical(lipgloss.Left, promptText, "", promptKeys)
-		sections = append(sections, lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(colorBorder).
-			Padding(0, 1).
-			Width(width-2).
-			Render(promptBody))
-	case u.manage.confirmDeleteName != "":
-		msg := fmt.Sprintf("Delete service '%s'? This cannot be undone.", u.manage.confirmDeleteName)
-		if u.manage.confirmDeleteKind == "group" {
-			msg = fmt.Sprintf("Delete group '%s'? Member services are kept.", u.manage.confirmDeleteName)
-		}
-		confirmText := lipgloss.NewStyle().Foreground(colorWarn).Bold(true).Render(msg)
-		confirmKeys := renderActionChips([][2]string{{"y", "confirm"}, {"n", "cancel"}})
-		confirmBody := lipgloss.JoinVertical(lipgloss.Left, confirmText, "", confirmKeys)
-		sections = append(sections, lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(colorBorder).
-			Padding(0, 1).
-			Width(width-2).
-			Render(confirmBody))
-	case u.manage.errorMsg != "":
-		sections = append(sections, lipgloss.NewStyle().Foreground(colorError).Render("✗ "+u.manage.errorMsg))
-	case u.manage.infoMsg != "":
-		sections = append(sections, lipgloss.NewStyle().Foreground(colorAccentAlt).Bold(true).Render(u.manage.infoMsg))
+	if contextPanel != "" {
+		sections = append(sections, contextPanel)
 	}
+	sections = append(sections, helpBox)
+	return lipgloss.JoinVertical(lipgloss.Left, sections...)
+}
 
-	sections = append(sections, renderActionChips([][2]string{
+func (u *UI) renderManageHelp(width int) string {
+	return renderHelpBox(width, helpItemLines(width, []helpItem{
 		{"type", "search"},
 		{"↑↓", "navigate"},
 		{"Space", "select"},
@@ -208,8 +200,44 @@ func (u *UI) renderManageOverlay() string {
 		{"^c", "config"},
 		{"Esc", "clear/close"},
 	}))
+}
 
-	return lipgloss.JoinVertical(lipgloss.Left, sections...)
+// renderManageContext keeps transient prompts between the full-height data
+// panel and the bottom-anchored help box. Its measured height is reserved before
+// the data panel is rendered, so the complete layout still fills the terminal.
+func (u *UI) renderManageContext(width int) string {
+	switch {
+	case u.manage.showNewPrompt:
+		promptText := lipgloss.NewStyle().Foreground(colorAccentAlt).Bold(true).Render("Create new —")
+		promptKeys := renderActionChips([][2]string{{"g", "group"}, {"s", "service"}, {"esc", "cancel"}})
+		promptBody := lipgloss.JoinVertical(lipgloss.Left, promptText, "", promptKeys)
+		return lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(colorBorder).
+			Padding(0, 1).
+			Width(width).
+			Render(promptBody)
+	case u.manage.confirmDeleteName != "":
+		msg := fmt.Sprintf("Delete service '%s'? This cannot be undone.", u.manage.confirmDeleteName)
+		if u.manage.confirmDeleteKind == "group" {
+			msg = fmt.Sprintf("Delete group '%s'? Member services are kept.", u.manage.confirmDeleteName)
+		}
+		confirmText := lipgloss.NewStyle().Foreground(colorWarn).Bold(true).Render(msg)
+		confirmKeys := renderActionChips([][2]string{{"y", "confirm"}, {"n", "cancel"}})
+		confirmBody := lipgloss.JoinVertical(lipgloss.Left, confirmText, "", confirmKeys)
+		return lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(colorBorder).
+			Padding(0, 1).
+			Width(width).
+			Render(confirmBody)
+	case u.manage.errorMsg != "":
+		return lipgloss.NewStyle().Foreground(colorError).Render("✗ " + u.manage.errorMsg)
+	case u.manage.infoMsg != "":
+		return lipgloss.NewStyle().Foreground(colorAccentAlt).Bold(true).Render(u.manage.infoMsg)
+	default:
+		return ""
+	}
 }
 
 // renderManageSearchLine renders the always-focused search input shown at the top

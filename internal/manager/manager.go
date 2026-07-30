@@ -117,6 +117,12 @@ func (s *runningService) appendLog(message string, isError bool) {
 	}
 }
 
+func (s *runningService) clearLogs() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.logs = nil
+}
+
 type ServiceManager struct {
 	services    map[string]*runningService
 	storage     *storage.Storage
@@ -587,6 +593,25 @@ func (m *ServiceManager) ListServiceStates() []model.Service {
 	})
 
 	return states
+}
+
+// ClearLogs clears the in-memory log history. An empty service name clears the
+// history for every running service; otherwise only the named service is
+// affected. Process state and forwarding are left untouched.
+func (m *ServiceManager) ClearLogs(serviceName string) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if serviceName != "" {
+		if svc, ok := m.services[serviceName]; ok {
+			svc.clearLogs()
+		}
+		return
+	}
+
+	for _, svc := range m.services {
+		svc.clearLogs()
+	}
 }
 
 func (m *ServiceManager) streamOutput(svc *runningService, reader io.Reader, isError bool) {

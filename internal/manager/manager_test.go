@@ -59,6 +59,27 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+func TestClearLogsRespectsScope(t *testing.T) {
+	first := &runningService{name: "first", logs: []model.LogEntry{{Message: "one"}}}
+	second := &runningService{name: "second", logs: []model.LogEntry{{Message: "two"}}}
+	mgr := &ServiceManager{services: map[string]*runningService{
+		"first": first, "second": second,
+	}}
+
+	mgr.ClearLogs("first")
+	if got := len(first.snapshot().Logs); got != 0 {
+		t.Fatalf("selected service still has %d log(s)", got)
+	}
+	if got := len(second.snapshot().Logs); got != 1 {
+		t.Fatalf("other service logs changed: got %d", got)
+	}
+
+	mgr.ClearLogs("")
+	if got := len(second.snapshot().Logs); got != 0 {
+		t.Fatalf("clear all left %d log(s)", got)
+	}
+}
+
 // TestNewShellCommandPreservesQuotedSpacedPath guards the fix for cert paths
 // under usernames containing spaces (e.g. C:\Users\ali mohammadi\...). A quoted
 // path in commandStr must reach the target program as one clean argument with no

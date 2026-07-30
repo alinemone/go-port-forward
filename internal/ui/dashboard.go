@@ -1,6 +1,9 @@
 package ui
 
 import (
+	"fmt"
+	"strings"
+
 	"github.com/alinemone/go-port-forward/internal/model"
 )
 
@@ -13,16 +16,29 @@ func (u *UI) ensureCursorInRange() {
 	}
 }
 
-func maxVisibleServices(totalHeight int) int {
+const minLogViewportHeight = 1
+
+func maxVisibleServices(serviceCount, totalHeight, chromeBelow int) int {
 	if totalHeight <= 0 {
 		return 8
 	}
-	cap := totalHeight / 2
-	if cap < 3 {
-		cap = 3
+
+	// Keep the complete help grid on-screen first. The service table receives
+	// whatever remains after the help and the smallest usable bordered log pane.
+	cap := totalHeight - chromeBelow - 2 - minLogViewportHeight - 4
+	halfHeightCap := totalHeight / 2
+	if cap > halfHeightCap {
+		cap = halfHeightCap
+	}
+	if cap < 1 {
+		cap = 1
 	}
 	if cap > 20 {
 		cap = 20
+	}
+	// A truncated table adds its own "more above/below" indicator row.
+	if serviceCount > cap && cap > 1 {
+		cap--
 	}
 	return cap
 }
@@ -57,8 +73,8 @@ func (u *UI) refreshViewportContent() {
 
 	u.ensureViewportSize()
 	contentWidth := u.viewport.Width() - 4
-	if contentWidth < 40 {
-		contentWidth = 40
+	if contentWidth < 8 {
+		contentWidth = 8
 	}
 
 	services := u.services
@@ -66,12 +82,31 @@ func (u *UI) refreshViewportContent() {
 		services = []model.Service{u.services[u.cursorIndex]}
 	}
 
-	follow := u.viewport.AtBottom()
 	newContent := renderLogsContent(services, contentWidth)
+	version := logVersion(services)
+	contentChanged := newContent != u.lastLogContent || version != u.lastLogVersion
 	u.viewport.SetContent(newContent)
-	if follow {
+	u.lastLogContent = newContent
+	u.lastLogVersion = version
+	if contentChanged {
 		u.viewport.GotoBottom()
 	}
+}
+
+// logVersion detects output that renders identically at second precision (for
+// example, a burst of repeated lines while the bounded log buffer rotates).
+// Nanosecond timestamps ensure that such new output still activates follow mode.
+func logVersion(services []model.Service) string {
+	var version strings.Builder
+	for i := range services {
+		logs := services[i].Logs
+		fmt.Fprintf(&version, "%s:%d", services[i].Name, len(logs))
+		if len(logs) > 0 {
+			fmt.Fprintf(&version, ":%d", logs[len(logs)-1].Time.UnixNano())
+		}
+		version.WriteByte(';')
+	}
+	return version.String()
 }
 
 func (u *UI) onCursorMoved() {
@@ -102,12 +137,10 @@ func (u *UI) ensureViewportSize() {
 	}
 }
 
-// chromeBelowLog returns the number of lines occupied below the log box: the
-// help bar (content rows + its border) plus the optional status line. The help
-// bar can wrap to multiple rows on narrow terminals, so this must be measured,
-// not assumed, or the bottom border gets clipped off-screen.
+// chromeBelowLog measures the responsive help grid, its outer border, and the
+// optional status line so narrow layouts can yield height to the full help.
 func (u *UI) chromeBelowLog() int {
-	h := len(helpLines(u.width, u.logScopeLabel(), u.aliasEnabled)) + 2 // help box border
+	h := len(helpLines(u.width, u.logScopeLabel(), u.aliasEnabled)) + 2
 	if u.editStatus != "" {
 		h++
 	}
@@ -119,7 +152,7 @@ func calculateViewportHeight(serviceCount, totalHeight, chromeBelow int) int {
 		chromeBelow = 3
 	}
 	visible := serviceCount
-	maxVis := maxVisibleServices(totalHeight)
+	maxVis := maxVisibleServices(serviceCount, totalHeight, chromeBelow)
 	if visible > maxVis {
 		visible = maxVis
 	}
@@ -132,8 +165,8 @@ func calculateViewportHeight(serviceCount, totalHeight, chromeBelow int) int {
 	}
 	overhead := tableLines + 2 + chromeBelow
 	viewportHeight := totalHeight - overhead
-	if viewportHeight < 3 {
-		viewportHeight = 3
+	if viewportHeight < minLogViewportHeight {
+		viewportHeight = minLogViewportHeight
 	}
 	return viewportHeight
 }

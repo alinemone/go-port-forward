@@ -43,6 +43,7 @@ type Controller interface {
 	StopAllServices()
 	RestartService(ctx context.Context, name string) error
 	RestartAllServices(ctx context.Context)
+	ClearLogs(serviceName string)
 }
 
 type UI struct {
@@ -67,6 +68,8 @@ type UI struct {
 	spinnerFrame      int
 	tableOffset       int
 	aliasEnabled      bool // cluster-host aliasing is on → the copy (y) action is available
+	lastLogContent    string
+	lastLogVersion    string
 }
 
 const uiTickInterval = 500 * time.Millisecond
@@ -206,6 +209,18 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			u.refreshViewportContent()
 			u.viewport.GotoBottom()
 
+		case "x":
+			scope := ""
+			label := "all services"
+			if u.logFilterSelected && u.cursorIndex >= 0 && u.cursorIndex < len(u.services) {
+				scope = u.services[u.cursorIndex].Name
+				label = scope
+			}
+			u.manager.ClearLogs(scope)
+			u.services = u.manager.ListServiceStates()
+			u.refreshViewportContent()
+			return u, u.setStatus("✓ Logs cleared: " + label)
+
 		case "y":
 			if u.aliasEnabled && u.cursorIndex < len(u.services) && len(u.services) > 0 {
 				return u, u.copyAlias(u.services[u.cursorIndex])
@@ -333,14 +348,14 @@ func (u *UI) viewContent() string {
 	if len(u.services) == 0 {
 		sections = append(sections, renderEmptyState())
 	} else {
-		maxVis := maxVisibleServices(u.height)
+		maxVis := maxVisibleServices(len(u.services), u.height, u.chromeBelowLog())
 		u.ensureCursorVisible(maxVis)
 		sections = append(sections, renderServiceTable(u.services, u.cursorIndex, u.tableOffset, maxVis, u.width))
 	}
 
-	logBoxWidth := u.width - 2
-	if logBoxWidth < 58 {
-		logBoxWidth = 58
+	logBoxWidth := u.width
+	if logBoxWidth < 1 {
+		logBoxWidth = 1
 	}
 	logBox := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).

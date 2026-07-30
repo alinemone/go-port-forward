@@ -20,8 +20,8 @@ func renderEmptyState() string {
 }
 
 func renderServiceTable(services []model.Service, selectedIndex, offset, maxVisible, width int) string {
-	if width < 60 {
-		width = 60
+	if width < 20 {
+		width = 20
 	}
 
 	if maxVisible <= 0 {
@@ -37,6 +37,7 @@ func renderServiceTable(services []model.Service, selectedIndex, offset, maxVisi
 	}
 
 	compact := width < 90
+	narrow := width < 60
 	showIcons := false
 	for i := start; i < end; i++ {
 		if services[i].IconEnabled {
@@ -52,6 +53,9 @@ func renderServiceTable(services []model.Service, selectedIndex, offset, maxVisi
 	uptimeWidth := 8
 	portWidth := 6
 	restartWidth := 8
+	if narrow {
+		statusWidth = 3
+	}
 	maxNameLen := 7
 	for i := range services {
 		nameLen := len(services[i].Name)
@@ -63,12 +67,12 @@ func renderServiceTable(services []model.Service, selectedIndex, offset, maxVisi
 		maxNameLen = 30
 	}
 
-	available := width - 2
-	if available < 60 {
-		available = 60
+	available := width - 4
+	if available < 16 {
+		available = 16
 	}
 	if compact {
-		minName := 8
+		minName := 5
 		fixed := statusWidth + portWidth + iconWidth + 6
 		nameWidth := available - fixed
 		if nameWidth < minName {
@@ -110,9 +114,13 @@ func renderServiceTable(services []model.Service, selectedIndex, offset, maxVisi
 	aliasWidth := maxAliasLen
 	showAlias := !compact && maxAliasLen > 0 && roomForAlias >= maxAliasLen
 
-	headerLine := headerPrefix + padRightDisplayWidth("SERVICE", nameCellWidth) + fmt.Sprintf(
+	statusHeader := "STATUS"
+	if narrow {
+		statusHeader = "ST"
+	}
+	headerLine := headerPrefix + padRightDisplayWidth(truncateRunes("SERVICE", nameCellWidth), nameCellWidth) + fmt.Sprintf(
 		"  %-*s",
-		statusWidth, "STATUS",
+		statusWidth, statusHeader,
 	)
 	if compact {
 		headerLine += fmt.Sprintf("  %-*s", portWidth, "PORT")
@@ -134,8 +142,8 @@ func renderServiceTable(services []model.Service, selectedIndex, offset, maxVisi
 	rows = append(rows, header)
 
 	sepWidth := width - 6
-	if sepWidth < 50 {
-		sepWidth = 50
+	if sepWidth < 10 {
+		sepWidth = 10
 	}
 	if sepWidth > 200 {
 		sepWidth = 200
@@ -171,6 +179,9 @@ func renderServiceTable(services []model.Service, selectedIndex, offset, maxVisi
 		uptime := formatUptime(svc.StartTime)
 
 		status := fmt.Sprintf("%s %-*s", statusIcon, statusWidth-2, statusText)
+		if narrow {
+			status = fmt.Sprintf("%-*s", statusWidth, statusIcon)
+		}
 		uptimeStr := fmt.Sprintf("%-*s", uptimeWidth, uptime)
 		portStr := fmt.Sprintf("%-*s", portWidth, svc.LocalPort)
 		restarts := fmt.Sprintf("%-*d", restartWidth, svc.RestartCount)
@@ -253,7 +264,7 @@ func renderServiceTable(services []model.Service, selectedIndex, offset, maxVisi
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colorBorder).
 		Padding(0, 1).
-		Width(width - 2)
+		Width(width)
 
 	return style.Render(table)
 }
@@ -312,8 +323,8 @@ func renderLogsContent(services []model.Service, maxWidth int) string {
 		timestamp := log.Entry.Time.Format("15:04:05")
 
 		nameWidth := maxWidth / 4
-		if nameWidth < 8 {
-			nameWidth = 8
+		if nameWidth < 4 {
+			nameWidth = 4
 		}
 		if nameWidth > 24 {
 			nameWidth = 24
@@ -331,8 +342,8 @@ func renderLogsContent(services []model.Service, maxWidth int) string {
 
 		prefixWidth := nameWidth + 12
 		availableWidth := maxWidth - prefixWidth
-		if availableWidth < 20 {
-			availableWidth = 20
+		if availableWidth < 4 {
+			availableWidth = 4
 		}
 
 		wrappedLines := wrapText(message, availableWidth)
@@ -369,36 +380,47 @@ func renderLogsContent(services []model.Service, maxWidth int) string {
 	return content.String()
 }
 
-// helpLines builds the wrapped, balanced content rows for the help bar (without
-// the surrounding border). The height layout depends on len(helpLines(...)), so
-// renderHelp must render exactly these lines.
+type helpItem struct{ key, description string }
+
+// helpLines lays shortcuts out as a responsive row-major grid. It tries the
+// largest possible column count first, so a wide terminal gets one row while a
+// narrow terminal gets aligned columns and additional rows.
 func helpLines(width int, logScope string, copyEnabled bool) []string {
-	if width < 60 {
-		width = 60
+	if width < 8 {
+		width = 8
 	}
 
-	keyStyle := lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
-	descStyle := lipgloss.NewStyle().Foreground(colorMuted)
-	const sepText = "  •  "
-	sepStyled := descStyle.Render(sepText)
-	sepW := lipgloss.Width(sepText)
-
-	type chip struct{ k, d string }
-	var chips []chip
-	if width < 90 {
-		chips = []chip{
-			{"↑↓", "move"},
-			{"l", "logs=" + logScope},
+	var items []helpItem
+	if width < 50 {
+		logScope = truncateRunes(logScope, 8)
+		items = []helpItem{
+			{"↑↓", "select"},
+			{"l", "logs " + logScope},
+			{"x", "clear logs"},
+			{"a", "manage"},
+			{"c", "config"},
+			{"r", "restart"},
+			{"^r", "restart all"},
+			{"s", "stop"},
+			{"q", "quit"},
+		}
+	} else if width < 90 {
+		items = []helpItem{
+			{"↑↓", "select"},
+			{"l", "logs " + logScope},
+			{"x", "clear logs"},
 			{"a", "add/edit"},
 			{"c", "config"},
 			{"r", "restart"},
+			{"^r", "restart all"},
 			{"s", "stop"},
 			{"q", "quit"},
 		}
 	} else {
-		chips = []chip{
-			{"↑↓/j/k", "move"},
-			{"l", "logs=" + logScope},
+		items = []helpItem{
+			{"↑↓/j/k", "select service"},
+			{"l", "log scope " + logScope},
+			{"x", "clear logs"},
 			{"a", "add/edit"},
 			{"c", "config"},
 			{"r", "restart"},
@@ -411,123 +433,122 @@ func helpLines(width int, logScope string, copyEnabled bool) []string {
 	// The copy (y) hint appears only when cluster-host aliasing is on — no alias,
 	// no copy. Inserted right after the logs chip.
 	if copyEnabled {
-		withCopy := make([]chip, 0, len(chips)+1)
-		withCopy = append(withCopy, chips[:2]...)
-		withCopy = append(withCopy, chip{"y", "copy alias"})
-		withCopy = append(withCopy, chips[2:]...)
-		chips = withCopy
+		withCopy := make([]helpItem, 0, len(items)+1)
+		withCopy = append(withCopy, items[:2]...)
+		withCopy = append(withCopy, helpItem{"y", "copy alias"})
+		withCopy = append(withCopy, items[2:]...)
+		items = withCopy
 	}
 
-	n := len(chips)
+	return helpItemLines(width, items)
+}
+
+func helpItemLines(width int, items []helpItem) []string {
+	if width < 8 {
+		width = 8
+	}
+	keyStyle := lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
+	descStyle := lipgloss.NewStyle().Foreground(colorMuted)
+
+	n := len(items)
 	styled := make([]string, n)
 	widths := make([]int, n)
-	for i, c := range chips {
-		styled[i] = keyStyle.Render(c.k) + descStyle.Render(" "+c.d)
-		widths[i] = lipgloss.Width(c.k + " " + c.d)
+	// The box spans the terminal width; reserve cells only for its border and
+	// horizontal padding when calculating the responsive grid.
+	inner := width - 4
+	if inner < 4 {
+		inner = 4
 	}
-
-	inner := width - 4 // 2 border + 2 padding
-	if inner < 10 {
-		inner = 10
-	}
-
-	// Minimum number of lines a greedy fit needs at this width.
-	minLines := 1
-	lineW := 0
-	for i, w := range widths {
-		if i == 0 {
-			lineW = w
-			continue
-		}
-		if lineW+sepW+w > inner {
-			minLines++
-			lineW = w
-		} else {
-			lineW += sepW + w
+	for i, item := range items {
+		keyWidth := lipgloss.Width(item.key)
+		maxDescWidth := inner - keyWidth - 2 // ": " between key and description
+		description := truncateRunes(item.description, maxDescWidth)
+		styled[i] = keyStyle.Render(item.key) + descStyle.Render(":")
+		widths[i] = keyWidth + 1
+		if description != "" {
+			styled[i] += descStyle.Render(" " + description)
+			widths[i] += 1 + lipgloss.Width(description)
 		}
 	}
 
-	// Split into minLines rows of (almost) equal chip count so the rows look
-	// balanced (e.g. 4+4 instead of 7+1). Fall back to greedy if an even
-	// split would overflow.
-	return balancedHelpLines(styled, widths, sepStyled, sepW, inner, minLines)
+	grid := helpGridLines(styled, widths, inner)
+	if len(grid) < 2 {
+		return grid
+	}
+
+	// A blank line between grid rows keeps neighboring actions visually
+	// distinct without adding internal borders or hardcoded decoration.
+	spaced := make([]string, 0, len(grid)*2-1)
+	for i, line := range grid {
+		if i > 0 {
+			spaced = append(spaced, "")
+		}
+		spaced = append(spaced, line)
+	}
+	return spaced
 }
 
 func renderHelp(width int, logScope string, copyEnabled bool) string {
+	return renderHelpBox(width, helpLines(width, logScope, copyEnabled))
+}
+
+func renderHelpBox(width int, lines []string) string {
 	boxWidth := width
-	if boxWidth < 60 {
-		boxWidth = 60
+	if boxWidth < 12 {
+		boxWidth = 12
 	}
-
-	help := strings.Join(helpLines(width, logScope, copyEnabled), "\n")
-
-	style := lipgloss.NewStyle().
+	help := strings.Join(lines, "\n")
+	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colorBorder).
 		Padding(0, 1).
-		Width(boxWidth - 2)
-
-	return style.Render(help)
+		Width(boxWidth).
+		Render(help)
 }
 
-// balancedHelpLines splits chips into L contiguous rows of as-equal-as-possible
-// count. If any such row would exceed inner width, it falls back to greedy
-// packing (which fits by construction).
-func balancedHelpLines(styled []string, widths []int, sepStyled string, sepW, inner, L int) []string {
+func helpGridLines(styled []string, widths []int, inner int) []string {
 	n := len(styled)
-	if L < 1 {
-		L = 1
+	if n == 0 {
+		return nil
 	}
+	const gap = 2
 
-	base, rem := n/L, n%L
-	groups := make([][]string, 0, L)
-	idx := 0
-	for g := 0; g < L; g++ {
-		cnt := base
-		if g < rem {
-			cnt++
-		}
-		w := 0
-		for j := idx; j < idx+cnt; j++ {
-			w += widths[j]
-			if j > idx {
-				w += sepW
+	for columns := n; columns >= 1; columns-- {
+		columnWidths := make([]int, columns)
+		for i, itemWidth := range widths {
+			column := i % columns
+			if itemWidth > columnWidths[column] {
+				columnWidths[column] = itemWidth
 			}
 		}
-		if w > inner {
-			return greedyHelpLines(styled, widths, sepStyled, sepW, inner)
+		totalWidth := gap * (columns - 1)
+		for _, columnWidth := range columnWidths {
+			totalWidth += columnWidth
 		}
-		groups = append(groups, styled[idx:idx+cnt])
-		idx += cnt
+		if totalWidth > inner {
+			continue
+		}
+
+		rows := (n + columns - 1) / columns
+		lines := make([]string, 0, rows)
+		for row := 0; row < rows; row++ {
+			var line strings.Builder
+			for column := 0; column < columns; column++ {
+				index := row*columns + column
+				if index >= n {
+					break
+				}
+				line.WriteString(styled[index])
+				if index+1 < n && column+1 < columns {
+					line.WriteString(strings.Repeat(" ", columnWidths[column]-widths[index]+gap))
+				}
+			}
+			lines = append(lines, line.String())
+		}
+		return lines
 	}
 
-	out := make([]string, 0, len(groups))
-	for _, g := range groups {
-		out = append(out, strings.Join(g, sepStyled))
-	}
-	return out
-}
-
-func greedyHelpLines(styled []string, widths []int, sepStyled string, sepW, inner int) []string {
-	var lines []string
-	var line string
-	lineW := 0
-	for i, s := range styled {
-		switch {
-		case line == "":
-			line, lineW = s, widths[i]
-		case lineW+sepW+widths[i] > inner:
-			lines = append(lines, line)
-			line, lineW = s, widths[i]
-		default:
-			line += sepStyled + s
-			lineW += sepW + widths[i]
-		}
-	}
-	if line != "" {
-		lines = append(lines, line)
-	}
-	return lines
+	return styled
 }
 
 func (u *UI) renderShutdownScreen() string {
