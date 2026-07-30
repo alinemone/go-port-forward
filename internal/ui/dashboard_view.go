@@ -441,6 +441,10 @@ func helpLines(width int, logScope string, copyEnabled bool) []string {
 }
 
 func helpItemLines(width int, items []helpItem) []string {
+	return helpItemLinesWithSpacing(width, items, true)
+}
+
+func helpItemLinesWithSpacing(width int, items []helpItem, addRowSpacing bool) []string {
 	if width < 8 {
 		width = 8
 	}
@@ -469,7 +473,7 @@ func helpItemLines(width int, items []helpItem) []string {
 	}
 
 	grid := helpGridLines(styled, widths, inner)
-	if len(grid) < 2 {
+	if len(grid) < 2 || !addRowSpacing {
 		return grid
 	}
 
@@ -483,6 +487,48 @@ func helpItemLines(width int, items []helpItem) []string {
 		spaced = append(spaced, line)
 	}
 	return spaced
+}
+
+func compactDashboardHelpLines(width int) []string {
+	items := []helpItem{
+		{"?", "all shortcuts"},
+		{"L", "logs"},
+		{"Ctrl+L", "clear"},
+		{"A", "manage"},
+		{"Q", "quit"},
+	}
+	if width < 50 {
+		items = []helpItem{
+			{"?", "help"},
+			{"L", "logs"},
+			{"Ctrl+L", "clear"},
+			{"Q", "quit"},
+		}
+	}
+	return helpItemLinesWithSpacing(width, items, false)
+}
+
+func useCompactHelp(height int, fullLines []string) bool {
+	if height <= 0 {
+		return false
+	}
+	budget := height / 4
+	if budget < 3 {
+		budget = 3
+	}
+	return len(fullLines)+2 > budget
+}
+
+func dashboardHelpLines(width, height int, logScope string, copyEnabled bool) []string {
+	full := helpLines(width, logScope, copyEnabled)
+	if useCompactHelp(height, full) {
+		return compactDashboardHelpLines(width)
+	}
+	return full
+}
+
+func renderDashboardHelp(width, height int, logScope string, copyEnabled bool) string {
+	return renderHelpBox(width, dashboardHelpLines(width, height, logScope, copyEnabled))
 }
 
 func renderHelp(width int, logScope string, copyEnabled bool) string {

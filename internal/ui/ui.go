@@ -70,6 +70,7 @@ type UI struct {
 	aliasEnabled      bool // cluster-host aliasing is on → the copy (y) action is available
 	lastLogContent    string
 	lastLogVersion    string
+	helpVisible       bool
 }
 
 const uiTickInterval = 500 * time.Millisecond
@@ -147,6 +148,21 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return u, nil
 		}
 		key := normalizeKeyToken(msg)
+		// Forms accept arbitrary text, so '?' remains input while editing a field.
+		// Everywhere else it opens the page-specific shortcut reference.
+		formActive := u.manage.active && (u.serviceForm.mode != "" || u.groupForm.mode != "")
+		if !formActive {
+			if u.helpVisible {
+				if key == "?" || key == "esc" {
+					u.helpVisible = false
+				}
+				return u, nil
+			}
+			if key == "?" {
+				u.helpVisible = true
+				return u, nil
+			}
+		}
 		if u.manage.active {
 			return u.updateManageMode(msg)
 		}
@@ -331,6 +347,9 @@ func (u *UI) viewContent() string {
 	if !u.ready {
 		return "Initializing..."
 	}
+	if u.helpVisible {
+		return u.renderShortcutOverlay(u.manage.active)
+	}
 
 	if u.manage.active {
 		if u.serviceForm.mode != "" {
@@ -372,7 +391,7 @@ func (u *UI) viewContent() string {
 		sections = append(sections, lipgloss.NewStyle().Foreground(statusColor).Render(u.editStatus))
 	}
 
-	sections = append(sections, renderHelp(u.width, u.logScopeLabel(), u.aliasEnabled))
+	sections = append(sections, renderDashboardHelp(u.width, u.height, u.logScopeLabel(), u.aliasEnabled))
 	return lipgloss.JoinVertical(lipgloss.Left, sections...)
 }
 

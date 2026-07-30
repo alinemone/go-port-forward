@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/alinemone/go-port-forward/internal/icons"
 	"github.com/alinemone/go-port-forward/internal/model"
@@ -177,11 +178,8 @@ func TestManageOverlayFillsTerminalAndAnchorsResponsiveHelp(t *testing.T) {
 			if !strings.HasPrefix(ansi.Strip(lines[len(lines)-1]), "╰") {
 				t.Fatalf("help is not anchored to terminal bottom: %q", ansi.Strip(lines[len(lines)-1]))
 			}
-			if !strings.Contains(plain, "type: search list") || !strings.Contains(plain, "Space: select / unselect") {
-				t.Fatalf("manage help does not use dashboard key grid: %q", plain)
-			}
-			if !strings.Contains(plain, "Ctrl+N: create Service") || strings.Contains(plain, "^n:") {
-				t.Fatalf("manage help must spell out Ctrl shortcuts: %q", plain)
+			if !strings.Contains(plain, "?: all shortcuts") || !strings.Contains(plain, "Space: select") {
+				t.Fatalf("manage compact help is missing essential actions: %q", plain)
 			}
 			for _, line := range lines {
 				if got := lipgloss.Width(line); got > u.width {
@@ -192,13 +190,94 @@ func TestManageOverlayFillsTerminalAndAnchorsResponsiveHelp(t *testing.T) {
 	}
 }
 
+func TestManageCompactHelpAddsSpacingWhenHeightAllows(t *testing.T) {
+	u := &UI{width: 55, height: 24}
+	plain := ansi.Strip(u.renderManageHelp(55))
+	blankRow := "│" + strings.Repeat(" ", 53) + "│"
+	if !strings.Contains(plain, "\n"+blankRow+"\n") {
+		t.Fatalf("manage help rows are not visually separated: %q", plain)
+	}
+
+	u.height = 12
+	tiny := ansi.Strip(u.renderManageHelp(55))
+	if strings.Contains(tiny, "\n"+blankRow+"\n") {
+		t.Fatalf("tiny manage help kept spacing beyond its height budget: %q", tiny)
+	}
+}
+
+func TestAdaptiveHelpUsesCompactFooterInSmallSplit(t *testing.T) {
+	full := dashboardHelpLines(120, 40, "ALL", false)
+	if strings.Contains(ansi.Strip(strings.Join(full, "\n")), "?: all shortcuts") {
+		t.Fatal("large terminal unexpectedly used compact help")
+	}
+
+	compact := dashboardHelpLines(40, 16, "ALL", false)
+	plain := ansi.Strip(strings.Join(compact, "\n"))
+	if !strings.Contains(plain, "?: help") || !strings.Contains(plain, "Ctrl+L: clear") {
+		t.Fatalf("small split did not use compact essentials: %q", plain)
+	}
+	if len(compact)+2 > 5 {
+		t.Fatalf("compact help is too tall: %d content rows", len(compact))
+	}
+}
+
+func TestShortcutOverlayIsFullScreenAndPageSpecific(t *testing.T) {
+	u := &UI{width: 70, height: 26, aliasEnabled: true}
+	for _, manage := range []bool{false, true} {
+		out := u.renderShortcutOverlay(manage)
+		plain := ansi.Strip(out)
+		if got := lipgloss.Width(strings.Split(out, "\n")[0]); got != u.width {
+			t.Fatalf("overlay width=%d, want %d", got, u.width)
+		}
+		if got := lipgloss.Height(out); got != u.height {
+			t.Fatalf("overlay height=%d, want %d", got, u.height)
+		}
+		if manage {
+			if !strings.Contains(plain, "MANAGEMENT") || !strings.Contains(plain, "Ctrl+N: create item") {
+				t.Fatalf("manage shortcuts missing: %q", plain)
+			}
+		} else if !strings.Contains(plain, "LOGS") || !strings.Contains(plain, "Ctrl+L: clear visible logs") {
+			t.Fatalf("dashboard shortcuts missing: %q", plain)
+		}
+	}
+}
+
+func TestShortcutOverlayDoesNotOverflowTinySplit(t *testing.T) {
+	for _, size := range []struct{ width, height int }{{32, 16}, {28, 10}} {
+		u := &UI{width: size.width, height: size.height}
+		out := u.renderShortcutOverlay(false)
+		if got := lipgloss.Height(out); got != size.height {
+			t.Fatalf("%dx%d split: overlay height=%d", size.width, size.height, got)
+		}
+		for _, line := range strings.Split(out, "\n") {
+			if got := lipgloss.Width(line); got > size.width {
+				t.Fatalf("%dx%d split: line width=%d: %q", size.width, size.height, got, ansi.Strip(line))
+			}
+		}
+	}
+}
+
+func TestQuestionMarkTogglesShortcutOverlay(t *testing.T) {
+	u := &UI{width: 70, height: 26, ready: true}
+	question := tea.KeyPressMsg{Code: '?', Text: "?"}
+	u.Update(question)
+	if !u.helpVisible || !strings.Contains(ansi.Strip(u.viewContent()), "SHORTCUTS") {
+		t.Fatal("? did not open shortcut overlay")
+	}
+
+	u.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	if u.helpVisible {
+		t.Fatal("Esc did not close shortcut overlay")
+	}
+}
+
 func TestNarrowLayoutPreservesHelpAndShrinksLogs(t *testing.T) {
-	chrome := len(helpLines(32, "ALL", false)) + 2
+	chrome := len(dashboardHelpLines(32, 20, "ALL", false)) + 2
 	if got := calculateViewportHeight(10, 20, chrome); got != minLogViewportHeight {
 		t.Fatalf("expected minimum log height %d, got %d", minLogViewportHeight, got)
 	}
-	if got := maxVisibleServices(10, 20, chrome); got != 1 {
-		t.Fatalf("expected service table to yield height to help, got %d visible rows", got)
+	if got := maxVisibleServices(10, 20, chrome); got != 8 {
+		t.Fatalf("expected compact help to preserve service rows, got %d visible rows", got)
 	}
 }
 

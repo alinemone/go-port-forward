@@ -140,7 +140,7 @@ func (u *UI) ensureViewportSize() {
 // chromeBelowLog measures the responsive help grid, its outer border, and the
 // optional status line so narrow layouts can yield height to the full help.
 func (u *UI) chromeBelowLog() int {
-	h := len(helpLines(u.width, u.logScopeLabel(), u.aliasEnabled)) + 2
+	h := len(dashboardHelpLines(u.width, u.height, u.logScopeLabel(), u.aliasEnabled)) + 2
 	if u.editStatus != "" {
 		h++
 	}

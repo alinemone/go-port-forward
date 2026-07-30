@@ -621,6 +621,7 @@ pf cleanup --all
 
 When running services:
 
+- **?** - Open the complete, page-specific shortcut reference
 - **↑↓** / **j k** - Move selection between services
 - **PgUp** / **PgDn** / **mouse wheel** - Scroll the log panel
 - **L** - Toggle the log panel between all services and only the selected service

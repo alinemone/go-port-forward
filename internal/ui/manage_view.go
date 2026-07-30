@@ -189,7 +189,30 @@ func (u *UI) renderManageOverlay() string {
 }
 
 func (u *UI) renderManageHelp(width int) string {
-	return renderHelpBox(width, helpItemLines(width, []helpItem{
+	full := helpItemLines(width, manageHelpItems())
+	if useCompactHelp(u.height, full) {
+		compactItems := []helpItem{
+			{"?", "all shortcuts"},
+			{"↑↓", "choose"},
+			{"Space", "select"},
+			{"Enter", "start"},
+			{"Esc", "back"},
+		}
+		full = helpItemLinesWithSpacing(width, compactItems, false)
+		spaced := helpItemLinesWithSpacing(width, compactItems, true)
+		budget := u.height / 4
+		if budget < 3 {
+			budget = 3
+		}
+		if len(spaced)+2 <= budget {
+			full = spaced
+		}
+	}
+	return renderHelpBox(width, full)
+}
+
+func manageHelpItems() []helpItem {
+	return []helpItem{
 		{"type", "search list"},
 		{"↑↓", "choose item"},
 		{"Space", "select / unselect"},
@@ -199,7 +222,7 @@ func (u *UI) renderManageHelp(width int) string {
 		{"Ctrl+D", "delete current"},
 		{"Ctrl+C", "edit config file"},
 		{"Esc", "clear search / back"},
-	}))
+	}
 }
 
 // renderManageContext keeps transient prompts between the full-height data
