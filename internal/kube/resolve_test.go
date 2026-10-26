@@ -74,7 +74,7 @@ func TestResolveServicePicksBestPodAndTranslatesPorts(t *testing.T) {
 	if pod.Name != "old" {
 		t.Errorf("picked pod %q, want the oldest ready pod without restarts", pod.Name)
 	}
-	want := []string{"1150:5432", "1151:5432", "1152:9187", "1153:5432"}
+	want := []forwardedPort{{1150, 5432}, {1151, 5432}, {1152, 9187}, {1153, 5432}}
 	if !reflect.DeepEqual(ports, want) {
 		t.Errorf("ports = %v, want %v", ports, want)
 	}
@@ -126,7 +126,7 @@ func TestResolveDeploymentUsesSelectorAndNamedPorts(t *testing.T) {
 	if pod.Name != "db-1" {
 		t.Errorf("picked %q, want db-1", pod.Name)
 	}
-	if want := []string{"9000:9187", "6000:6000"}; !reflect.DeepEqual(ports, want) {
+	if want := []forwardedPort{{9000, 9187}, {6000, 6000}}; !reflect.DeepEqual(ports, want) {
 		t.Errorf("ports = %v, want %v", ports, want)
 	}
 }

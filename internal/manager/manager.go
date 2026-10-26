@@ -46,6 +46,9 @@ type runningService struct {
 	healthySince  time.Time
 	lastRunStable bool
 	logs          []model.LogEntry
+	pod           string
+	namespace     string
+	stats         *kube.Stats
 	cancel        context.CancelFunc
 	done          chan struct{}
 	mu            sync.RWMutex
@@ -69,7 +72,7 @@ func (s *runningService) snapshot() model.Service {
 	logsCopy := make([]model.LogEntry, len(s.logs))
 	copy(logsCopy, s.logs)
 
-	return model.Service{
+	svc := model.Service{
 		Name:         s.name,
 		Command:      s.command,
 		LocalPort:    s.localPort,
@@ -83,7 +86,21 @@ func (s *runningService) snapshot() model.Service {
 		RestartCount: s.restartCount,
 		Alias:        s.alias,
 		Logs:         logsCopy,
+
+		Target:         s.spec.Target(),
+		Namespace:      s.namespace,
+		Pod:            s.pod,
+		ConnectedSince: s.healthySince,
 	}
+	if s.stats != nil {
+		svc.ActiveConns = s.stats.ActiveConns.Load()
+		svc.TotalConns = s.stats.TotalConns.Load()
+		svc.BytesIn = s.stats.BytesIn.Load()
+		svc.BytesOut = s.stats.BytesOut.Load()
+		svc.LastActivity = s.stats.LastActivity()
+		svc.Latency = s.stats.Latency()
+	}
+	return svc
 }
 
 func (s *runningService) setError(message string) {
@@ -226,6 +243,7 @@ func (m *ServiceManager) StartService(ctx context.Context, name string) error {
 		name:        name,
 		command:     command,
 		spec:        spec,
+		stats:       &kube.Stats{},
 		localPort:   localPort,
 		mainPort:    mainPort,
 		iconEnabled: iconEnabled,
@@ -293,12 +311,15 @@ func (m *ServiceManager) runServiceOnce(ctx context.Context, svc *runningService
 	svc.mu.Unlock()
 
 	err := m.forward(ctx, svc.spec, m.forwardOptions(), kube.Hooks{
-		Log:   svc.appendLog,
-		Ready: svc.markHealthy,
+		Log:    svc.appendLog,
+		Ready:  svc.markHealthy,
+		Target: svc.setTarget,
+		Stats:  svc.stats,
 	})
 
 	svc.mu.Lock()
 	svc.lastRunStable = !svc.healthySince.IsZero() && time.Since(svc.healthySince) >= healthyResetThreshold
+	svc.healthySince = time.Time{}
 	svc.mu.Unlock()
 
 	if ctx.Err() != nil {
@@ -500,4 +521,11 @@ func (m *ServiceManager) ClearLogs(serviceName string) {
 	for _, svc := range m.services {
 		svc.clearLogs()
 	}
+}
+
+func (s *runningService) setTarget(pod, namespace string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pod = pod
+	s.namespace = namespace
 }

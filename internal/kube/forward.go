@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -46,8 +45,10 @@ type Options struct {
 
 // Hooks receives a forward's progress.
 type Hooks struct {
-	Log   func(message string, isError bool)
-	Ready func() // called once every local listener is up
+	Log    func(message string, isError bool)
+	Ready  func()                      // called once the local listeners are up
+	Target func(pod, namespace string) // called once the target is resolved to a pod
+	Stats  *Stats                      // connection/traffic counters; may be nil
 }
 
 // Forward resolves spec to a pod and forwards its ports until ctx is cancelled
@@ -57,6 +58,9 @@ type Hooks struct {
 func Forward(ctx context.Context, spec Spec, opts Options, hooks Hooks) error {
 	if hooks.Log == nil {
 		hooks.Log = func(string, bool) {}
+	}
+	if hooks.Stats == nil {
+		hooks.Stats = &Stats{}
 	}
 
 	cfg, ns, err := restConfig(spec, opts)
@@ -78,6 +82,9 @@ func Forward(ctx context.Context, spec Spec, opts Options, hooks Hooks) error {
 		return err
 	}
 	hooks.Log(fmt.Sprintf("%s → pod %s (namespace %s)", spec.Target(), pod.Name, ns), false)
+	if hooks.Target != nil {
+		hooks.Target(pod.Name, ns)
+	}
 
 	logger := logr.New(&logSink{log: hooks.Log})
 	reqURL := api.url("api/v1/namespaces/" + ns + "/pods/" + pod.Name + "/portforward")
@@ -86,36 +93,53 @@ func Forward(ctx context.Context, spec Spec, opts Options, hooks Hooks) error {
 		return err
 	}
 
+	conn, err := dial(ctx, dialer)
+	if err != nil || conn == nil {
+		return err
+	}
+	defer conn.Close()
+
 	addresses := spec.Addresses
 	if len(addresses) == 0 {
 		addresses = []string{"localhost"}
 	}
+	t := &tunnel{conn: conn, stats: hooks.Stats, log: hooks.Log}
+	return t.serve(ctx, addresses, ports, hooks.Ready)
+}
 
-	fwCtx, stop := context.WithCancel(klog.NewContext(ctx, logger))
-	defer stop()
-
-	ready := make(chan struct{})
-	fw, err := portforward.NewOnAddressesWithContext(fwCtx, dialer, addresses, ports, ready,
-		lineWriter{log: hooks.Log}, lineWriter{log: hooks.Log, isError: true})
-	if err != nil {
-		return err
+// dial upgrades the port-forward request. The dialer itself can't be cancelled,
+// so a stop that arrives mid-dial returns at once (nil conn, nil error) and the
+// late connection, if any, is closed in the background.
+func dial(ctx context.Context, dialer httpstream.Dialer) (httpstream.Connection, error) {
+	type result struct {
+		conn     httpstream.Connection
+		protocol string
+		err      error
 	}
-
+	done := make(chan result, 1)
 	go func() {
-		select {
-		case <-ready:
-			if hooks.Ready != nil {
-				hooks.Ready()
-			}
-		case <-fwCtx.Done():
-		}
+		conn, protocol, err := dialer.Dial(portforward.PortForwardProtocolV1Name)
+		done <- result{conn, protocol, err}
 	}()
 
-	err = fw.ForwardPorts()
-	if ctx.Err() != nil {
-		return nil
+	select {
+	case <-ctx.Done():
+		go func() {
+			if r := <-done; r.conn != nil {
+				r.conn.Close()
+			}
+		}()
+		return nil, nil
+	case r := <-done:
+		if r.err != nil {
+			return nil, fmt.Errorf("error upgrading connection: %w", r.err)
+		}
+		if r.protocol != portforward.PortForwardProtocolV1Name {
+			r.conn.Close()
+			return nil, fmt.Errorf("unable to negotiate protocol: client supports %q, server returned %q", portforward.PortForwardProtocolV1Name, r.protocol)
+		}
+		return r.conn, nil
 	}
-	return err
 }
 
 // restConfig builds the client config the way kubectl does for the same flags:
@@ -172,22 +196,6 @@ func newDialer(cfg *rest.Config, u *url.URL, logger klog.Logger) (httpstream.Dia
 	return portforward.NewFallbackDialer(wsDialer, spdyDialer, func(err error) bool {
 		return httpstream.IsUpgradeFailure(err) || httpstream.IsHTTPSProxyError(err)
 	}), nil
-}
-
-// lineWriter turns client-go's "Forwarding from…" / "Handling connection for…"
-// output into one log entry per line.
-type lineWriter struct {
-	log     func(string, bool)
-	isError bool
-}
-
-func (w lineWriter) Write(p []byte) (int, error) {
-	for _, line := range strings.Split(string(p), "\n") {
-		if line = strings.TrimSpace(line); line != "" {
-			w.log(line, w.isError)
-		}
-	}
-	return len(p), nil
 }
 
 // logSink is a logr sink that forwards client-go's errors for one tunnel into

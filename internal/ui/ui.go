@@ -3,12 +3,10 @@ package ui
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 	"github.com/atotto/clipboard"
 
 	"github.com/alinemone/go-port-forward/internal/model"
@@ -19,6 +17,16 @@ import (
 type tickMsg time.Time
 
 type spinnerTickMsg time.Time
+
+// animTickMsg advances the dashboard animations (spinner, scan sweep, live
+// pulse) faster than the 500ms data refresh.
+type animTickMsg struct{}
+
+const animInterval = 150 * time.Millisecond
+
+func animTick() tea.Cmd {
+	return tea.Tick(animInterval, func(time.Time) tea.Msg { return animTickMsg{} })
+}
 
 type shutdownDoneMsg struct{}
 
@@ -71,6 +79,8 @@ type UI struct {
 	lastLogContent    string
 	lastLogVersion    string
 	helpVisible       bool
+
+	traffic map[string]*traffic // per-service throughput history for the charts
 }
 
 const uiTickInterval = 500 * time.Millisecond
@@ -98,7 +108,7 @@ func normalizeKeyToken(msg tea.KeyMsg) string {
 }
 
 func (u *UI) Init() tea.Cmd {
-	return tickCmd(uiTickInterval)
+	return tea.Batch(tickCmd(uiTickInterval), animTick())
 }
 
 func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -109,15 +119,11 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		u.width = msg.Width
 		u.height = msg.Height
 
-		viewportHeight := calculateViewportHeight(len(u.services), u.height, u.chromeBelowLog())
 		if !u.ready {
-			u.viewport = viewport.New(viewport.WithWidth(msg.Width), viewport.WithHeight(viewportHeight))
-			u.viewport.YPosition = 0
+			u.viewport = viewport.New()
 			u.ready = true
-		} else {
-			u.viewport.SetWidth(msg.Width)
-			u.viewport.SetHeight(viewportHeight)
 		}
+		u.refreshViewportContent()
 
 		if u.manage.active && u.serviceForm.mode != "" {
 			inputWidth := u.formInputWidth()
@@ -168,7 +174,7 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		switch key {
-		case "q", "ctrl+c", "esc":
+		case "q", "ctrl+c": // not Esc: one stray key must not drop every forward
 			u.quitting = true
 			return u, tea.Batch(u.shutdownCmd(), spinnerTick())
 
@@ -277,6 +283,13 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return u, nil
 
+	case animTickMsg:
+		if u.quitting { // the shutdown screen runs its own spinner tick
+			return u, nil
+		}
+		u.spinnerFrame++
+		return u, animTick()
+
 	case shutdownDoneMsg:
 		return u, tea.Quit
 
@@ -286,6 +299,7 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		u.services = u.manager.ListServiceStates()
 		u.ensureCursorInRange()
+		u.sampleTraffic(time.Time(msg))
 		u.refreshViewportContent()
 		return u, tickCmd(uiTickInterval)
 
@@ -362,37 +376,7 @@ func (u *UI) viewContent() string {
 	}
 
 	u.ensureViewportSize()
-
-	sections := make([]string, 0, 3)
-	if len(u.services) == 0 {
-		sections = append(sections, renderEmptyState())
-	} else {
-		maxVis := maxVisibleServices(len(u.services), u.height, u.chromeBelowLog())
-		u.ensureCursorVisible(maxVis)
-		sections = append(sections, renderServiceTable(u.services, u.cursorIndex, u.tableOffset, maxVis, u.width))
-	}
-
-	logBoxWidth := u.width
-	if logBoxWidth < 1 {
-		logBoxWidth = 1
-	}
-	logBox := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(colorBorder).
-		Width(logBoxWidth).
-		Render(u.viewport.View())
-	sections = append(sections, logBox)
-
-	if u.editStatus != "" {
-		statusColor := colorAccentAlt
-		if strings.HasPrefix(u.editStatus, "✗") {
-			statusColor = colorError
-		}
-		sections = append(sections, lipgloss.NewStyle().Foreground(statusColor).Render(u.editStatus))
-	}
-
-	sections = append(sections, renderDashboardHelp(u.width, u.height, u.logScopeLabel(), u.aliasEnabled))
-	return lipgloss.JoinVertical(lipgloss.Left, sections...)
+	return u.renderDashboard()
 }
 
 func tickCmd(interval time.Duration) tea.Cmd {

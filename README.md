@@ -619,6 +619,11 @@ pf cleanup --all
 
 ## 🎮 TUI Controls
 
+Each running forward is one line — status, local port, uptime — followed by a live
+traffic chart in that service's own color: the newest second sits at the right edge and
+history fades to the left; the status dot pulses while data is flowing. A failing
+forward shows why in place of its chart. Logs sit below.
+
 When running services:
 
 - **?** - Open the complete, page-specific shortcut reference
@@ -632,7 +637,7 @@ When running services:
 - **a** - Add another stored service to the running set
 - **c** - Bulk-edit configuration in `$EDITOR`
 - **y** - Copy the selected service's cluster-host alias (shown only when `pf alias` is on)
-- **q** / **Esc** / **Ctrl+C** - Quit and stop all services
+- **q** / **Ctrl+C** - Quit and stop all services (Esc no longer quits, so a stray key can't drop every forward)
 
 ## 📂 File Locations
 

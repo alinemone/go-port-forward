@@ -24,8 +24,8 @@ var workloadPaths = map[string]string{
 // resolveTarget picks the pod a port-forward target lands on and translates the
 // requested remote ports into that pod's container ports, mirroring kubectl:
 // a Service port maps through its targetPort, a named port is looked up on the
-// pod's containers. It returns the "LOCAL:REMOTE" strings client-go expects.
-func resolveTarget(ctx context.Context, get getter, ns string, spec Spec) (*corev1.Pod, []string, error) {
+// pod's containers. It returns the resolved local → container port pairs.
+func resolveTarget(ctx context.Context, get getter, ns string, spec Spec) (*corev1.Pod, []forwardedPort, error) {
 	switch spec.Kind {
 	case "pod":
 		var pod corev1.Pod
@@ -150,8 +150,8 @@ func podRestarts(pod *corev1.Pod) int32 {
 // servicePorts maps Service ports to the pod's container ports via each
 // Service port's targetPort. A remote port the Service doesn't declare is an
 // error, exactly as in kubectl.
-func servicePorts(svc *corev1.Service, pod *corev1.Pod, mappings []PortMapping) ([]string, error) {
-	out := make([]string, 0, len(mappings))
+func servicePorts(svc *corev1.Service, pod *corev1.Pod, mappings []PortMapping) ([]forwardedPort, error) {
+	out := make([]forwardedPort, 0, len(mappings))
 	for _, m := range mappings {
 		svcPort, err := findServicePort(svc, m.Remote)
 		if err != nil {
@@ -169,7 +169,7 @@ func servicePorts(svc *corev1.Service, pod *corev1.Pod, mappings []PortMapping) 
 		default:
 			containerPort = int32(svcPort.TargetPort.IntValue())
 		}
-		out = append(out, fmt.Sprintf("%d:%d", m.Local, containerPort))
+		out = append(out, forwardedPort{Local: m.Local, Remote: int(containerPort)})
 	}
 	return out, nil
 }
@@ -185,18 +185,18 @@ func findServicePort(svc *corev1.Service, remote string) (*corev1.ServicePort, e
 	return nil, fmt.Errorf("service %s does not have a service port %s", svc.Name, remote)
 }
 
-func containerPorts(pod *corev1.Pod, mappings []PortMapping) ([]string, error) {
-	out := make([]string, 0, len(mappings))
+func containerPorts(pod *corev1.Pod, mappings []PortMapping) ([]forwardedPort, error) {
+	out := make([]forwardedPort, 0, len(mappings))
 	for _, m := range mappings {
-		if _, err := strconv.Atoi(m.Remote); err == nil {
-			out = append(out, fmt.Sprintf("%d:%s", m.Local, m.Remote))
+		if n, err := strconv.Atoi(m.Remote); err == nil {
+			out = append(out, forwardedPort{Local: m.Local, Remote: n})
 			continue
 		}
 		port, err := lookupContainerPort(pod, m.Remote)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, fmt.Sprintf("%d:%d", m.Local, port))
+		out = append(out, forwardedPort{Local: m.Local, Remote: int(port)})
 	}
 	return out, nil
 }

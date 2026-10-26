@@ -130,7 +130,7 @@ func (u *UI) dashboardShortcutSections() []shortcutSection {
 		{title: "SERVICES", items: serviceItems},
 		{title: "APPLICATION", items: []helpItem{
 			{"C", "edit configuration file"},
-			{"Q / Esc", "quit & stop all"},
+			{"Q / Ctrl+C", "quit & stop all"},
 		}},
 	}
 }
