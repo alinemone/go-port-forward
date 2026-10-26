@@ -38,7 +38,7 @@ func uExample(lines ...string) {
 func showUsage() {
 	fmt.Println()
 	fmt.Println("pf - Port Forward Manager")
-	fmt.Println("Forward remote ports (kubectl / ssh) to your machine and keep them alive.")
+	fmt.Println("Forward Kubernetes ports to your machine and keep them alive.")
 
 	uHead("USAGE:")
 	fmt.Println("  pf <command> [arguments]")

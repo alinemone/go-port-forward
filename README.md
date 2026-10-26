@@ -692,7 +692,7 @@ When running services:
 - Files stored in user's home directory (`~/.pf/`)
 
 ### Antivirus Notice
-This tool executes system commands (kubectl, ssh) and manages network connections, which may trigger antivirus false positives.
+This tool opens Kubernetes port-forward tunnels and local listeners, which may trigger antivirus false positives.
 
 **Recommendations:**
 - Build from source (or trusted CI artifacts) and verify checksums
@@ -705,7 +705,7 @@ This tool executes system commands (kubectl, ssh) and manages network connection
 ## 🐛 Troubleshooting
 
 ### Port already in use
-Run `pf cleanup` to kill all kubectl/ssh processes.
+Another program (often a leftover `kubectl port-forward`) holds the port. Run `pf cleanup` to free the configured ports, or `pf cleanup --all` to kill every kubectl/ssh process.
 
 ### Certificate not working
 - Verify the P12 file path is correct
@@ -713,15 +713,23 @@ Run `pf cleanup` to kill all kubectl/ssh processes.
 - Check certificate with: `pf cert list`
 
 ### Service won't start
-- Check the command manually: `kubectl port-forward ...`
-- Verify kubectl context and permissions
+- Read the service's log pane — pf shows the exact API error (e.g. `services "db" not found`, `no running pod found for service/db`)
+- Verify the kube context and permissions
 - Check if certificate is required
+
+### How forwarding works
+Services are stored as ordinary `kubectl port-forward` command lines, but pf does not run kubectl: it parses the command and opens the tunnel itself with `k8s.io/client-go`, using your kubeconfig (`KUBECONFIG` / `~/.kube/config`, or `--kubeconfig` / `--context`) and the certificate from `pf cert add`. No kubectl binary is needed and no child process is spawned per service.
+
+- Targets: `pod/`, `svc/`, `deploy/`, `sts/`, `rs/`, `ds/` (a bare name is a pod)
+- Flags: `-n/--namespace`, `--context`, `--kubeconfig`, `--cluster`, `--user`, `--server`, `--token`, `--address`, `--client-certificate`, `--client-key`, `--insecure-skip-tls-verify`
+- When a tunnel breaks, pf re-resolves the pod (it may have moved) and reconnects with backoff.
 
 ## 💻 Development
 
 ### Requirements
-- Go 1.21+
+- Go 1.26+
 - Dependencies:
+  - `k8s.io/client-go` - in-process port-forwarding
   - `github.com/charmbracelet/bubbletea` - TUI framework
   - `github.com/charmbracelet/lipgloss` - Styling
   - `software.sslmate.com/src/go-pkcs12` - P12 handling

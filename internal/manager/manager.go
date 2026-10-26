@@ -1,30 +1,38 @@
 package manager
 
 import (
-	"bufio"
 	"context"
+	"errors"
 	"fmt"
-	"io"
 	"math/rand"
 	"os"
-	"os/exec"
 	"regexp"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/alinemone/go-port-forward/internal/cert"
+	"github.com/alinemone/go-port-forward/internal/kube"
 	"github.com/alinemone/go-port-forward/internal/model"
 	"github.com/alinemone/go-port-forward/internal/storage"
 )
 
+// shutdownGraceTimeout bounds how long stopping waits for a service's run loop
+// to exit. Forwards stop promptly on cancel (their listeners close at once); the
+// cap only matters if a tunnel is still mid-dial to an unreachable cluster. A
+// var so tests can shrink it.
+var shutdownGraceTimeout = 3 * time.Second
+
+// forwardFunc runs one tunnel until ctx is cancelled or it breaks. A field on
+// ServiceManager so tests can substitute a fake cluster.
+type forwardFunc func(ctx context.Context, spec kube.Spec, opts kube.Options, hooks kube.Hooks) error
+
 type runningService struct {
 	name          string
 	command       string
+	spec          kube.Spec
 	localPort     string
 	mainPort      string
 	iconEnabled   bool
@@ -36,33 +44,22 @@ type runningService struct {
 	restartCount  int
 	alias         string
 	healthySince  time.Time
-	lastHealthy   time.Time
 	lastRunStable bool
 	logs          []model.LogEntry
 	cancel        context.CancelFunc
 	done          chan struct{}
-	process       *os.Process
 	mu            sync.RWMutex
-
-	// bulkKill is set before cancelling during StopAllServices so the per-run
-	// ctx.Done watcher skips its own taskkill — the whole fleet is killed in one
-	// batched call instead of one spawn per service.
-	bulkKill atomic.Bool
 }
 
 func (s *runningService) markHealthy() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.status != model.StatusHealthy {
-		s.status = model.StatusHealthy
-		s.lastError = ""
-	}
-	now := time.Now()
+	s.status = model.StatusHealthy
+	s.lastError = ""
 	if s.healthySince.IsZero() {
-		s.healthySince = now
+		s.healthySince = time.Now()
 	}
-	s.lastHealthy = now
 }
 
 func (s *runningService) snapshot() model.Service {
@@ -123,10 +120,29 @@ func (s *runningService) clearLogs() {
 	s.logs = nil
 }
 
+// stop cancels the run loop and waits, bounded by shutdownGraceTimeout, for it
+// to exit — by which point the tunnel's local listeners are closed.
+func (s *runningService) stop() {
+	s.mu.RLock()
+	cancel, done := s.cancel, s.done
+	s.mu.RUnlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	if done != nil {
+		select {
+		case <-done:
+		case <-time.After(shutdownGraceTimeout):
+		}
+	}
+}
+
 type ServiceManager struct {
 	services    map[string]*runningService
 	storage     *storage.Storage
 	certManager *cert.Manager
+	forward     forwardFunc
 	mu          sync.RWMutex
 }
 
@@ -141,6 +157,7 @@ func NewServiceManager(st *storage.Storage) *ServiceManager {
 		services:    make(map[string]*runningService),
 		storage:     st,
 		certManager: certMgr,
+		forward:     kube.Forward,
 	}
 }
 
@@ -152,6 +169,8 @@ func ValidateCommand(command string) error {
 	return ensureValidCommand(command)
 }
 
+var serviceNameRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
 func ensureValidServiceName(name string) error {
 	if name == "" {
 		return fmt.Errorf("service name cannot be empty")
@@ -159,22 +178,15 @@ func ensureValidServiceName(name string) error {
 	if len(name) > 50 {
 		return fmt.Errorf("service name too long (max 50 characters)")
 	}
-
-	dangerousChars := []string{"..", "/", "\\", ":", "*", "?", "\"", "<", ">", "|"}
-	for _, char := range dangerousChars {
-		if strings.Contains(name, char) {
-			return fmt.Errorf("service name contains invalid character: %s", char)
-		}
-	}
-
-	matched, _ := regexp.MatchString(`^[a-zA-Z0-9_-]+$`, name)
-	if !matched {
+	if !serviceNameRegex.MatchString(name) {
 		return fmt.Errorf("service name can only contain letters, numbers, hyphens, and underscores")
 	}
-
 	return nil
 }
 
+// ensureValidCommand accepts exactly the commands pf can run: a parseable
+// `kubectl port-forward`. Nothing is handed to a shell, so there is no command
+// blacklist to maintain.
 func ensureValidCommand(command string) error {
 	if command == "" {
 		return fmt.Errorf("command cannot be empty")
@@ -182,30 +194,8 @@ func ensureValidCommand(command string) error {
 	if len(command) > 1000 {
 		return fmt.Errorf("command too long (max 1000 characters)")
 	}
-
-	dangerousPatterns := []string{
-		`rm\s+-rf`,
-		`dd\s+if=`,
-		`mkfs`,
-		// Windows disk format ("format c:"), not the word "format" itself —
-		// kubectl/psql commands legitimately contain e.g. --output=custom-format.
-		`\bformat\s+[a-z]:`,
-		`del\s+/f`,
-		`shutdown`,
-		`reboot`,
-		`halt`,
-		`poweroff`,
-	}
-
-	lower := strings.ToLower(command)
-	for _, pattern := range dangerousPatterns {
-		matched, _ := regexp.MatchString(pattern, lower)
-		if matched {
-			return fmt.Errorf("command contains potentially dangerous operation: %s", pattern)
-		}
-	}
-
-	return nil
+	_, err := kube.ParseCommand(command)
+	return err
 }
 
 func (m *ServiceManager) StartService(ctx context.Context, name string) error {
@@ -217,18 +207,13 @@ func (m *ServiceManager) StartService(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
-
-	if err := ensureValidCommand(command); err != nil {
+	spec, err := kube.ParseCommand(command)
+	if err != nil {
 		return fmt.Errorf("invalid command for service '%s': %v", name, err)
 	}
 
-	localPort, mainPort := storage.ParsePortsFromCommand(command)
-	if localPort == "" {
-		return fmt.Errorf("could not extract ports from command")
-	}
-	if mainPort == "" {
-		mainPort = localPort
-	}
+	localPort := strconv.Itoa(spec.Ports[0].Local)
+	mainPort := spec.Ports[0].Remote
 	iconSet, iconEnabled, err := m.storage.IconSet()
 	if err != nil {
 		return err
@@ -238,19 +223,19 @@ func (m *ServiceManager) StartService(ctx context.Context, name string) error {
 	svcCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	svc := &runningService{
-		name:         name,
-		command:      command,
-		localPort:    localPort,
-		mainPort:     mainPort,
-		iconEnabled:  iconEnabled,
-		iconGlyph:    icon.Glyph,
-		iconColor:    icon.Color,
-		status:       model.StatusConnecting,
-		startTime:    time.Now(),
-		restartCount: 0,
-		logs:         make([]model.LogEntry, 0),
-		cancel:       cancel,
-		done:         done,
+		name:        name,
+		command:     command,
+		spec:        spec,
+		localPort:   localPort,
+		mainPort:    mainPort,
+		iconEnabled: iconEnabled,
+		iconGlyph:   icon.Glyph,
+		iconColor:   icon.Color,
+		status:      model.StatusConnecting,
+		startTime:   time.Now(),
+		logs:        make([]model.LogEntry, 0),
+		cancel:      cancel,
+		done:        done,
 	}
 
 	m.mu.Lock()
@@ -269,123 +254,74 @@ func (m *ServiceManager) runServiceLoop(ctx context.Context, svc *runningService
 	const baseBackoff = 2 * time.Second
 	const maxBackoff = 30 * time.Second
 
-	isFirstRun := true
-
-	for {
-		select {
-		case <-ctx.Done():
+	for isFirstRun := true; ; isFirstRun = false {
+		if ctx.Err() != nil {
 			return
-		default:
-			if !isFirstRun {
-				svc.mu.Lock()
-				svc.restartCount = nextRestartCount(svc.restartCount, svc.lastRunStable)
-				restartCount := svc.restartCount
-				svc.mu.Unlock()
-
-				backoff := baseBackoff * time.Duration(1<<uint(restartCount-1))
-				if backoff > maxBackoff {
-					backoff = maxBackoff
-				}
-
-				jitter := time.Duration(float64(backoff) * 0.1 * (rand.Float64()*2 - 1))
-				backoff += jitter
-
-				svc.appendLog(
-					fmt.Sprintf("━━━━ RECONNECTING (attempt #%d) in %.1fs ━━━━", restartCount, backoff.Seconds()),
-					false,
-				)
-
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(backoff):
-				}
-			}
-			isFirstRun = false
-			m.runServiceOnce(ctx, svc)
 		}
+		if !isFirstRun {
+			svc.mu.Lock()
+			svc.restartCount = nextRestartCount(svc.restartCount, svc.lastRunStable)
+			restartCount := svc.restartCount
+			svc.mu.Unlock()
+
+			backoff := baseBackoff * time.Duration(1<<uint(min(restartCount-1, 5)))
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+			backoff += time.Duration(float64(backoff) * 0.1 * (rand.Float64()*2 - 1))
+
+			svc.appendLog(
+				fmt.Sprintf("━━━━ RECONNECTING (attempt #%d) in %.1fs ━━━━", restartCount, backoff.Seconds()),
+				false,
+			)
+
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(backoff):
+			}
+		}
+		m.runServiceOnce(ctx, svc)
 	}
 }
 
 func (m *ServiceManager) runServiceOnce(ctx context.Context, svc *runningService) {
-	if ctx.Err() != nil {
-		return // shutdown won the race; don't launch a doomed forwarder
-	}
-
 	svc.mu.Lock()
 	svc.status = model.StatusConnecting
 	svc.lastError = ""
 	svc.healthySince = time.Time{}
 	svc.mu.Unlock()
 
-	commandStr := svc.command
-	if m.certManager != nil {
-		if certConfig, exists := m.certManager.GetCertificate(); exists {
-			if strings.Contains(commandStr, "kubectl") {
-				commandStr = addKubectlCertFlags(commandStr, certConfig.CertPath, certConfig.KeyPath)
-			}
-		}
-	}
-
-	cmd := newShellCommand(commandStr)
-
-	stdoutPipe, err := cmd.StdoutPipe()
-	if err != nil {
-		message := fmt.Sprintf("Failed to create stdout pipe: %v", err)
-		svc.setError(message)
-		svc.appendLog(message, true)
-		return
-	}
-
-	stderrPipe, err := cmd.StderrPipe()
-	if err != nil {
-		message := fmt.Sprintf("Failed to create stderr pipe: %v", err)
-		svc.setError(message)
-		svc.appendLog(message, true)
-		return
-	}
-
-	if err := cmd.Start(); err != nil {
-		message := fmt.Sprintf("Start failed: %v", err)
-		svc.setError(message)
-		return
-	}
-
-	svc.mu.Lock()
-	svc.process = cmd.Process
-	svc.mu.Unlock()
-
-	// Close the shutdown race: if cancellation landed while this process was
-	// being launched, the bulk-kill batch ran without its PID and the ctx
-	// watcher below stands down for bulk-killed services — reap it here.
-	if ctx.Err() != nil {
-		killProcessTree(cmd.Process)
-	}
-
-	go func() {
-		<-ctx.Done()
-		// During a bulk shutdown, StopAllServices force-kills every process tree
-		// in one batched call, so skip the per-service kill here.
-		if svc.bulkKill.Load() {
-			return
-		}
-		killProcessTree(cmd.Process)
-	}()
-
-	go m.streamOutput(svc, stdoutPipe, false)
-	go m.streamOutput(svc, stderrPipe, true)
-
-	err = cmd.Wait()
+	err := m.forward(ctx, svc.spec, m.forwardOptions(), kube.Hooks{
+		Log:   svc.appendLog,
+		Ready: svc.markHealthy,
+	})
 
 	svc.mu.Lock()
 	svc.lastRunStable = !svc.healthySince.IsZero() && time.Since(svc.healthySince) >= healthyResetThreshold
-	svc.process = nil
 	svc.mu.Unlock()
 
-	if err != nil && ctx.Err() == nil {
-		message := fmt.Sprintf("Process died: %v", err)
-		svc.setError(message)
+	if ctx.Err() != nil {
+		return
 	}
+	if err == nil {
+		err = errors.New("port-forward ended unexpectedly")
+	}
+	svc.appendLog(err.Error(), true)
+	svc.setError(normalizeErrorLine(err.Error()))
+}
+
+// forwardOptions reads the configured client certificate on every attempt, so
+// a certificate added with `pf cert add` applies on the next reconnect.
+func (m *ServiceManager) forwardOptions() kube.Options {
+	if m.certManager == nil {
+		return kube.Options{}
+	}
+	certConfig, ok := m.certManager.GetCertificate()
+	if !ok {
+		return kube.Options{}
+	}
+	return kube.Options{ClientCert: certConfig.CertPath, ClientKey: certConfig.KeyPath}
 }
 
 const healthyResetThreshold = 30 * time.Second
@@ -397,44 +333,12 @@ func nextRestartCount(prev int, lastRunStable bool) int {
 	return prev + 1
 }
 
-func addKubectlCertFlags(command, certPath, keyPath string) string {
-	if !strings.Contains(command, "kubectl ") {
-		return command
+func normalizeErrorLine(line string) string {
+	line = strings.Join(strings.Fields(line), " ")
+	if len(line) > 150 {
+		line = line[:147] + "..."
 	}
-
-	certFlags := fmt.Sprintf(`--client-certificate="%s" --client-key="%s" `, certPath, keyPath)
-	parts := strings.Split(command, "kubectl ")
-	if len(parts) < 2 {
-		return command
-	}
-
-	var out strings.Builder
-	out.Grow(len(command) + len(certFlags)*(len(parts)-1))
-	out.WriteString(parts[0])
-
-	for _, part := range parts[1:] {
-		trimmed := strings.TrimLeft(part, " \t")
-		out.WriteString("kubectl ")
-		if !(strings.HasPrefix(trimmed, "--client-certificate") || strings.HasPrefix(trimmed, "--client-key")) {
-			out.WriteString(certFlags)
-		}
-		out.WriteString(part)
-	}
-
-	return out.String()
-}
-
-func killProcessTree(proc *os.Process) {
-	if proc == nil {
-		return
-	}
-
-	if runtime.GOOS == "windows" {
-		pid := strconv.Itoa(proc.Pid)
-		exec.Command("taskkill", "/F", "/T", "/PID", pid).Run()
-	} else {
-		killUnixProcessGroup(proc.Pid)
-	}
+	return line
 }
 
 func (m *ServiceManager) StopService(name string) {
@@ -447,7 +351,7 @@ func (m *ServiceManager) StopService(name string) {
 	delete(m.services, name)
 	m.mu.Unlock()
 
-	teardownService(svc)
+	svc.stop()
 }
 
 func (m *ServiceManager) restartInPlace(ctx context.Context, name string) {
@@ -459,7 +363,7 @@ func (m *ServiceManager) restartInPlace(ctx context.Context, name string) {
 		return
 	}
 
-	teardownService(svc)
+	svc.stop()
 
 	svcCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
@@ -513,43 +417,27 @@ func (m *ServiceManager) StartStoredService(ctx context.Context, name string) er
 	return m.StartService(ctx, name)
 }
 
-// StopAllServices tears down every running service as fast as possible. It marks
-// each service for bulk kill and cancels it (so the loops stop and their own
-// ctx.Done watchers stand down), then force-kills all their process trees in a
-// single batched call. On Windows that means one taskkill spawn for the whole
-// fleet instead of one per service; on Unix each kill is a direct syscall.
+// StopAllServices cancels every running service at once and waits for them
+// concurrently, so shutdown takes as long as the slowest single service rather
+// than their sum.
 func (m *ServiceManager) StopAllServices() {
 	m.mu.Lock()
 	services := make([]*runningService, 0, len(m.services))
 	for _, svc := range m.services {
 		services = append(services, svc)
-		svc.bulkKill.Store(true)
-		if svc.cancel != nil {
-			svc.cancel()
-		}
 	}
 	m.services = make(map[string]*runningService)
 	m.mu.Unlock()
 
-	procs := make([]*os.Process, 0, len(services))
-	ports := make([]string, 0, len(services))
+	var wg sync.WaitGroup
 	for _, svc := range services {
-		if proc := svc.currentProcess(); proc != nil {
-			procs = append(procs, proc)
-		}
-		if svc.localPort != "" {
-			ports = append(ports, svc.localPort)
-		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			svc.stop()
+		}()
 	}
-
-	// One batched tree kill for the whole fleet, then wait (bounded) for every
-	// run loop to wind down so no in-flight restart can spawn a fresh forwarder
-	// behind our back, and finally verify in parallel that every local port
-	// actually freed — falling back to a port-based kill for anything the tree
-	// kill missed.
-	killProcessTrees(procs)
-	awaitServiceLoops(services, shutdownGraceTimeout)
-	ensurePortsFree(ports)
+	wg.Wait()
 }
 
 // NoteAlias surfaces, in a running service's log pane, that it is also reachable
@@ -611,26 +499,5 @@ func (m *ServiceManager) ClearLogs(serviceName string) {
 
 	for _, svc := range m.services {
 		svc.clearLogs()
-	}
-}
-
-func (m *ServiceManager) streamOutput(svc *runningService, reader io.Reader, isError bool) {
-	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-
-		svc.appendLog(line, isError)
-
-		switch classifyOutputLine(line, isError) {
-		case lineKindHealthy:
-			svc.markHealthy()
-		case lineKindFatalError:
-			svc.setError(normalizeErrorLine(line))
-		}
 	}
 }

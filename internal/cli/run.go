@@ -68,15 +68,10 @@ func runStartCommand(args []string) {
 		cancel()
 	}()
 
-	localPorts := make([]string, 0, len(serviceNames))
 	for _, name := range serviceNames {
-		command, err := st.GetService(name)
-		if err != nil {
+		if _, err := st.GetService(name); err != nil {
 			fmt.Printf("Error: Service '%s' not found\n", name)
 			os.Exit(1)
-		}
-		if localPort, _ := storage.ParsePortsFromCommand(command); localPort != "" {
-			localPorts = append(localPorts, localPort)
 		}
 	}
 
@@ -121,10 +116,11 @@ func runStartCommand(args []string) {
 	// elevation prompt (when needed) is visible.
 	clearAliases := startAliasReconciler(ctx, st, mgr)
 
-	// Always tear down every service before returning — even when the UI exits
-	// with an error or is killed by a signal — so no forwarder is left holding a
-	// port. StopAllServices is idempotent, so the in-UI quit path calling it too
-	// is harmless.
+	// Tear down every service before returning — even when the UI exits with an
+	// error or is killed by a signal. Forwards run in-process, so their local
+	// listeners close here (and with the process, at the latest); there is no
+	// child process that could outlive pf. StopAllServices is idempotent, so the
+	// in-UI quit path calling it too is harmless.
 	_, runErr := program.Run()
 	mgr.StopAllServices()
 
@@ -133,14 +129,6 @@ func runStartCommand(args []string) {
 	// itself once this process exits.
 	if clearAliases != nil {
 		clearAliases()
-	}
-
-	// Final guarantee that quitting really released every forwarded port: any
-	// port still held here (e.g. by a forwarder that escaped the tree kill) is
-	// force-freed, and whatever survives even that is reported loudly.
-	if busy := manager.VerifyPortsReleased(localPorts); len(busy) > 0 {
-		fmt.Printf("Warning: port(s) still in use after shutdown: %s\n", strings.Join(busy, ", "))
-		fmt.Println("Run 'pf cleanup' to force-free them.")
 	}
 
 	if runErr != nil {

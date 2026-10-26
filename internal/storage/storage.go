@@ -7,9 +7,11 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/alinemone/go-port-forward/internal/icons"
+	"github.com/alinemone/go-port-forward/internal/kube"
 	"github.com/alinemone/go-port-forward/internal/model"
 	"github.com/alinemone/go-port-forward/internal/theme"
 )
@@ -506,7 +508,13 @@ func (s *Storage) GetService(name string) (string, error) {
 
 var portRegex = regexp.MustCompile(`(\d+):(\d+)`)
 
+// ParsePortsFromCommand returns the first LOCAL and REMOTE port of a command.
+// kubectl port-forward commands are parsed properly; the regex is only a
+// fallback for lines pf can't run (so `pf list` can still show their ports).
 func ParsePortsFromCommand(command string) (local, remote string) {
+	if spec, err := kube.ParseCommand(command); err == nil {
+		return strconv.Itoa(spec.Ports[0].Local), spec.Ports[0].Remote
+	}
 	matches := portRegex.FindStringSubmatch(command)
 	if len(matches) == 3 {
 		return matches[1], matches[2]
