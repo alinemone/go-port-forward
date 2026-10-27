@@ -19,86 +19,37 @@ Modern CLI tool for managing multiple port-forward connections with real-time mo
 
 ## 📥 Installation
 
-### From Releases (Recommended)
+One command — it picks the right build for your system, verifies its checksum and puts `pf` on your PATH.
 
-#### 🪟 Windows
+**🪟 Windows** (PowerShell, no admin needed):
+```powershell
+irm https://raw.githubusercontent.com/alinemone/go-port-forward/main/install.ps1 | iex
+```
 
-1. Download `pf-windows-amd64.exe` from [Releases](https://github.com/alinemone/go-port-forward/releases)
-2. Open **PowerShell** in the folder where you downloaded it and run this one command. It
-   creates `~/.pf` if missing, renames the binary to `pf.exe`, moves it there, and adds
-   `~/.pf` to your user PATH:
-   ```powershell
-   $dest = "$HOME\.pf"
-   New-Item -ItemType Directory -Force -Path $dest | Out-Null
-   Move-Item -Force .\pf-windows-amd64.exe "$dest\pf.exe"
-   $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-   if ($userPath -notlike "*$dest*") {
-       $newPath = if ([string]::IsNullOrEmpty($userPath)) { $dest } else { "$userPath;$dest" }
-       [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
-   }
-   Write-Host "Installed to $dest\pf.exe - open a NEW terminal, then run: pf"
-   ```
-3. **Close and reopen** your terminal (PATH changes only apply to new sessions), then run
-   from anywhere:
-   ```cmd
-   pf
-   ```
+**🐧 Linux / 🍎 macOS** (Intel or ARM / Apple Silicon):
+```bash
+curl -fsSL https://raw.githubusercontent.com/alinemone/go-port-forward/main/install.sh | sh
+```
+
+Then open a new terminal and run `pf`. Later updates: `pf update`.
+
+| Where it installs | |
+|---|---|
+| Windows | `~\.pf\pf.exe`, added to your user PATH |
+| Linux / macOS | `/usr/local/bin/pf` when writable, otherwise `~/.local/bin/pf` (the script tells you if that needs adding to PATH) |
+
+Options, as environment variables: `PF_VERSION=v3.2.1` installs a specific release,
+`PF_INSTALL_DIR=…` picks the directory. Running the installer again upgrades in place —
+even while `pf` is running.
 
 <details>
-<summary>Prefer to do it manually?</summary>
+<summary>Prefer to install by hand?</summary>
 
-1. Rename `pf-windows-amd64.exe` to `pf.exe` (right-click → **Rename**, or `ren pf-windows-amd64.exe pf.exe`)
-2. Move `pf.exe` into a folder that is already in your PATH
-3. Run `pf` from anywhere
+Download the file for your system from [Releases](https://github.com/alinemone/go-port-forward/releases)
+(`pf-windows-amd64.exe`, `pf-linux-amd64`, `pf-linux-arm64`, `pf-darwin-amd64`, `pf-darwin-arm64`),
+check it against `SHA256SUMS.txt`, rename it to `pf` (`pf.exe` on Windows), make it executable
+(`chmod +x pf`) and move it into a directory on your PATH.
 </details>
-
-#### 🐧 Linux (Intel/AMD)
-
-1. Download `pf-linux-amd64` from [Releases](https://github.com/alinemone/go-port-forward/releases)
-2. Rename and install in one command:
-   ```bash
-   mv pf-linux-amd64 pf && chmod +x pf && sudo mv pf /usr/local/bin/
-   ```
-3. Run from anywhere:
-   ```bash
-   pf
-   ```
-
-#### 🐧 Linux (ARM/ARM64)
-
-1. Download `pf-linux-arm64` from [Releases](https://github.com/alinemone/go-port-forward/releases)
-2. Rename and install in one command:
-   ```bash
-   mv pf-linux-arm64 pf && chmod +x pf && sudo mv pf /usr/local/bin/
-   ```
-3. Run from anywhere:
-   ```bash
-   pf
-   ```
-
-#### 🍎 macOS (Intel)
-
-1. Download `pf-darwin-amd64` from [Releases](https://github.com/alinemone/go-port-forward/releases)
-2. Rename and install in one command:
-   ```bash
-   mv pf-darwin-amd64 pf && chmod +x pf && sudo mv pf /usr/local/bin/
-   ```
-3. Run from anywhere:
-   ```bash
-   pf
-   ```
-
-#### 🍎 macOS (Apple Silicon M1/M2/M3)
-
-1. Download `pf-darwin-arm64` from [Releases](https://github.com/alinemone/go-port-forward/releases)
-2. Rename and install in one command:
-   ```bash
-   mv pf-darwin-arm64 pf && chmod +x pf && sudo mv pf /usr/local/bin/
-   ```
-3. Run from anywhere:
-   ```bash
-   pf
-   ```
 
 ### From Source
 

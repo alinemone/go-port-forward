@@ -23,45 +23,35 @@
 
 ## 📥 نصب
 
-آخرین نسخه رو از بخش [Releases](https://github.com/alinemone/go-port-forward/releases) دانلود کن.
+فقط یک دستور — خودش نسخه‌ی مناسب سیستمت رو انتخاب می‌کنه، checksum فایل رو چک می‌کنه و `pf` رو توی PATH می‌ذاره.
 
-### 🪟 ویندوز
-
-فایل `pf-windows-amd64.exe` رو دانلود کن، بعد توی **PowerShell** در همون پوشه این دستور رو اجرا کن. این دستور پوشه‌ی `~/.pf` رو می‌سازه، اسم فایل رو به `pf.exe` عوض می‌کنه، اونجا منتقلش می‌کنه و `~/.pf` رو به PATH کاربر اضافه می‌کنه:
-
+**🪟 ویندوز** (PowerShell، دسترسی ادمین لازم نیست):
 ```powershell
-$dest = "$HOME\.pf"
-New-Item -ItemType Directory -Force -Path $dest | Out-Null
-Move-Item -Force .\pf-windows-amd64.exe "$dest\pf.exe"
-$userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-if ($userPath -notlike "*$dest*") {
-    $newPath = if ([string]::IsNullOrEmpty($userPath)) { $dest } else { "$userPath;$dest" }
-    [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
-}
-Write-Host "نصب شد در $dest\pf.exe — یک ترمینال جدید باز کن و بزن: pf"
+irm https://raw.githubusercontent.com/alinemone/go-port-forward/main/install.ps1 | iex
 ```
 
-بعد **ترمینال رو ببند و دوباره باز کن** (تغییر PATH فقط روی ترمینال‌های جدید اعمال می‌شه)، حالا از هر جایی می‌تونی بزنی `pf`.
-
-### 🐧 لینوکس / 🍎 مک
-
-فایل مناسب سیستمت رو دانلود کن و با یک دستور نصب کن:
-
+**🐧 لینوکس / 🍎 مک** (Intel یا ARM / Apple Silicon):
 ```bash
-# لینوکس (Intel/AMD)
-mv pf-linux-amd64  pf && chmod +x pf && sudo mv pf /usr/local/bin/
-
-# لینوکس (ARM64)
-mv pf-linux-arm64  pf && chmod +x pf && sudo mv pf /usr/local/bin/
-
-# مک (Intel)
-mv pf-darwin-amd64 pf && chmod +x pf && sudo mv pf /usr/local/bin/
-
-# مک (Apple Silicon — M1/M2/M3)
-mv pf-darwin-arm64 pf && chmod +x pf && sudo mv pf /usr/local/bin/
+curl -fsSL https://raw.githubusercontent.com/alinemone/go-port-forward/main/install.sh | sh
 ```
 
-بعد از هر جایی بزن `pf`.
+بعد یک ترمینال جدید باز کن و بزن `pf`. برای آپدیت‌های بعدی: `pf update`.
+
+| محل نصب | |
+|---|---|
+| ویندوز | `~\.pf\pf.exe` و اضافه شدن به PATH کاربر |
+| لینوکس / مک | `/usr/local/bin/pf` اگه قابل نوشتن باشه، وگرنه `~/.local/bin/pf` (اگه لازم باشه به PATH اضافه‌ش کنی، خود اسکریپت بهت می‌گه) |
+
+تنظیمات اختیاری با متغیر محیطی: `PF_VERSION=v3.2.1` برای نصب یک نسخه‌ی مشخص، و `PF_INSTALL_DIR=…` برای انتخاب پوشه. اجرای دوباره‌ی همین دستور، نسخه رو آپدیت می‌کنه — حتی وقتی `pf` در حال اجراست.
+
+<details>
+<summary>ترجیح می‌دی دستی نصب کنی؟</summary>
+
+فایل مناسب سیستمت رو از [Releases](https://github.com/alinemone/go-port-forward/releases) دانلود کن
+(`pf-windows-amd64.exe`، `pf-linux-amd64`، `pf-linux-arm64`، `pf-darwin-amd64`، `pf-darwin-arm64`)،
+با `SHA256SUMS.txt` چکش کن، اسمش رو `pf` بذار (روی ویندوز `pf.exe`)، قابل اجراش کن (`chmod +x pf`)
+و به یک پوشه‌ی داخل PATH منتقلش کن.
+</details>
 
 ### ساخت از سورس
 
