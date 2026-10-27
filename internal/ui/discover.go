@@ -217,13 +217,10 @@ func (u *UI) handleDiscoverMsg(msg tea.Msg) (bool, tea.Cmd) {
 			d.scanError = msg.err.Error()
 			return true, nil
 		}
+		// Nothing is pre-selected: suggestions only lead the list, the user
+		// picks. Already-saved services are shown but can't be picked.
 		d.candidates = msg.candidates
 		d.saved = u.savedTargets()
-		for i, c := range d.candidates {
-			if c.Tier == kube.TierSuggested && d.saved[d.namespace+"/"+c.Service] == "" {
-				d.selected[i] = true
-			}
-		}
 		return true, nil
 	}
 	return false, nil

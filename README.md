@@ -631,9 +631,9 @@ or, inside the live view, press **d** (or **a**, then **Ctrl+N** and **d** from 
 1. **Target** — the kube context (Ctrl+T switches) and the namespace. Namespaces are
    suggested from the cluster, or from your saved services when you can't list them.
 2. **Select** — every service of the namespace, grouped: *suggested* data stores
-   (the Postgres proxy, Redis haproxy, Kafka bootstrap, …) come pre-selected; replicas,
+   (the Postgres proxy, Redis haproxy, Kafka bootstrap, …) are listed first — pick with Space; replicas,
    per-pod and headless services are listed under *more*; apps under *other*.
-   Services you already saved are marked.
+   Services you already saved are marked and can't be picked again.
 3. **Review** — each one gets a proposed name (`salam-gate-pg`), a free local port and
    the generated command, all editable; problems are flagged before saving. **Enter**
    adds them all to `services.json` (and, in the live view, selects them so Enter

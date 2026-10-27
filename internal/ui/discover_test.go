@@ -88,7 +88,7 @@ func TestDiscoverWizardEndToEnd(t *testing.T) {
 		t.Fatalf("Tab completed to %q", got)
 	}
 
-	// Enter scans; suggested stores are pre-selected, saved ones are not.
+	// Enter scans. Nothing is pre-selected; saved services can't be picked.
 	press(u, tea.KeyPressMsg{Code: tea.KeyEnter})
 	if u.discover.step != stepSelect || u.discover.loading {
 		t.Fatalf("scan did not finish: step=%d loading=%v err=%q", u.discover.step, u.discover.loading, u.discover.scanError)
@@ -100,14 +100,24 @@ func TestDiscoverWizardEndToEnd(t *testing.T) {
 			t.Errorf("select step is missing %q\n%s", want, plain)
 		}
 	}
-	if !u.discover.selected[0] || u.discover.selected[1] {
-		t.Fatalf("pre-selection wrong: %v (postgres yes, already-saved redis no)", u.discover.selected)
+	if u.discoverSelectionCount() != 0 {
+		t.Fatalf("something was pre-selected: %v", u.discover.selected)
+	}
+	press(u, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if u.discover.step != stepSelect {
+		t.Fatal("Enter with nothing picked must stay on the select step")
 	}
 
-	// Also take the replica.
+	// Pick postgres; try the already-saved redis (refused); pick the replica.
+	space := tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}
+	press(u, space)
 	press(u, tea.KeyPressMsg{Code: tea.KeyDown})
+	press(u, space)
+	if u.discover.selected[1] {
+		t.Fatal("an already-saved service could be picked")
+	}
 	press(u, tea.KeyPressMsg{Code: tea.KeyDown})
-	press(u, tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
+	press(u, space)
 	press(u, tea.KeyPressMsg{Code: tea.KeyEnter})
 	if u.discover.step != stepReview || len(u.discover.items) != 2 {
 		t.Fatalf("review has %d items", len(u.discover.items))
@@ -165,7 +175,8 @@ func TestDiscoverBlocksDuplicateNames(t *testing.T) {
 	_ = u.store.AddService("salam-gate-pg", "kubectl port-forward svc/x 1:1")
 
 	drain(u, u.openDiscover("prod-salam-gate", false))
-	press(u, tea.KeyPressMsg{Code: tea.KeyEnter}) // review the pre-selected postgres+redis
+	press(u, tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}) // pick postgres
+	press(u, tea.KeyPressMsg{Code: tea.KeyEnter})
 	if u.discover.step != stepReview {
 		t.Fatal("did not reach review")
 	}
@@ -247,9 +258,10 @@ func TestDashboardDKeyOpensDiscovery(t *testing.T) {
 	// Adding lands in the Hangar with the new services ready to launch.
 	press(u, key('d'))
 	u.discover.nsInput.SetValue("prod-salam-gate")
-	press(u, tea.KeyPressMsg{Code: tea.KeyEnter})
-	press(u, tea.KeyPressMsg{Code: tea.KeyEnter})
-	press(u, tea.KeyPressMsg{Code: tea.KeyEnter})
+	press(u, tea.KeyPressMsg{Code: tea.KeyEnter})            // scan
+	press(u, tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}) // pick postgres
+	press(u, tea.KeyPressMsg{Code: tea.KeyEnter})            // review
+	press(u, tea.KeyPressMsg{Code: tea.KeyEnter})            // add
 	if u.discover.active || !u.manage.active || !u.manage.selectedServices["salam-gate-pg"] {
 		t.Fatalf("after adding: discover=%v hangar=%v selected=%v", u.discover.active, u.manage.active, u.manage.selectedServices)
 	}

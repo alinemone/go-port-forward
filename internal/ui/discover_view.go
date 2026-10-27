@@ -166,7 +166,7 @@ func (u *UI) renderDiscoverSelect(width, height int) []string {
 	end := min(len(all), start+rows)
 
 	out := []string{fg(colorText).Render(fmt.Sprintf("%d selected", u.discoverSelectionCount())) +
-		fg(colorMuted).Render("  ·  suggested data stores are pre-selected")}
+		fg(colorMuted).Render("  ·  Space to pick · ✓ saved ones are already in your list")}
 	for _, l := range all[start:end] {
 		out = append(out, l.text)
 	}
