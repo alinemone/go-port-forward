@@ -135,7 +135,7 @@ func newRaCmd() *cobra.Command {
 
 func newDeleteCmd() *cobra.Command {
 	return &cobra.Command{
-		Use: "delete", Aliases: []string{"d", "rm"}, Short: "Delete a service",
+		Use: "delete", Aliases: []string{"rm"}, Short: "Delete a service",
 		Args:              cobra.ArbitraryArgs,
 		ValidArgsFunction: completeServices,
 		Run:               func(_ *cobra.Command, args []string) { runDeleteCommand(args) },

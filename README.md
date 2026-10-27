@@ -123,11 +123,11 @@ pf list
 | Command | Alias | Description |
 |---------|-------|-------------|
 | `add`   | `a`   | Add new service |
-| `discover [ns]` | `scan` | Scan a namespace and add its databases/caches as services |
+| `discover [ns]` | `d`, `scan` | Scan a namespace and add its databases/caches as services |
 | `list`  | `l`   | List all services |
 | `kubectl` | `k` | Run any kubectl command with configured certificate |
 | `run`   | `r`   | Run services with TUI |
-| `delete`| `d`   | Delete service |
+| `delete`| `rm`  | Delete service |
 | `rename`| `ren`, `mv` | Rename a service or group |
 | `edit`  |       | Bulk-edit all services/groups in `$EDITOR` |
 | `cleanup`| `c`  | Free configured ports (`--all` kills all kubectl/ssh) |
@@ -574,7 +574,7 @@ pf cleanup --all
 Instead of writing port-forward commands by hand, let pf find them:
 
 ```bash
-pf discover prod-salam-gate     # or: pf discover   (then pick the namespace)
+pf d prod-salam-gate     # same as: pf discover prod-salam-gate · or just: pf d
 ```
 
 or, inside the live view, press **d** (or **a**, then **Ctrl+N** and **d** from the add/edit screen). Three steps:

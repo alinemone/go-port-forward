@@ -46,11 +46,11 @@ func showUsage() {
 
 	uHead("SERVICES:")
 	uRow(27, `a, add <name> "<command>"`, "Add a new service")
-	uRow(27, "discover [namespace]", "Scan a namespace and add its databases/caches as services")
+	uRow(27, "d, discover [namespace]", "Scan a namespace and add its databases/caches as services")
 	uRow(27, "l, list", "List all saved services")
 	uRow(27, "r, run <names>", "Run one or more services in the live view (comma-separated)")
 	uRow(27, "ra, run all", "Run every saved service")
-	uRow(27, "d, delete <name>", "Delete a service")
+	uRow(27, "rm, delete <name>", "Delete a service")
 	uRow(27, "rename <old> <new>", "Rename a service")
 	uExample(`add db "kubectl port-forward service/postgres 5432:5432"`, "run db,redis")
 
