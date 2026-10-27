@@ -6,7 +6,6 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 
 	"github.com/alinemone/go-port-forward/internal/manager"
 )
@@ -26,7 +25,7 @@ func (u *UI) formInputWidth() int {
 	if u.width <= 0 {
 		return 64
 	}
-	w := u.width - 11
+	w := u.width - 12 // frame borders + the input rail
 	if w < 20 {
 		w = 20
 	}
@@ -35,6 +34,7 @@ func (u *UI) formInputWidth() int {
 
 func newServiceTextInput(placeholder, value string, width int) textinput.Model {
 	ti := textinput.New()
+	ti.Prompt = "" // the form draws its own rail
 	ti.Placeholder = placeholder
 	ti.CharLimit = 1000
 	ti.SetWidth(width)
@@ -192,65 +192,4 @@ func (u *UI) submitServiceForm() (tea.Model, tea.Cmd) {
 		return u, tea.Batch(restartCmd, statusCmd)
 	}
 	return u, statusCmd
-}
-
-func (u *UI) renderServiceForm() string {
-	width := u.width
-	if width <= 0 {
-		width = 120
-	}
-	if width < 60 {
-		width = 60
-	}
-
-	title := "Add new service"
-	if u.serviceForm.mode == "edit" {
-		title = fmt.Sprintf("Edit service: %s", u.serviceForm.originalName)
-	}
-	titleStyled := lipgloss.NewStyle().
-		Foreground(colorAccent).
-		Bold(true).
-		Render(title)
-
-	labelStyle := lipgloss.NewStyle().Foreground(colorMuted)
-	activeLabel := lipgloss.NewStyle().Foreground(colorAccentAlt).Bold(true)
-
-	nameLabel := labelStyle.Render("  Name:")
-	cmdLabel := labelStyle.Render("  Command:")
-	if u.serviceForm.focusedField == 0 {
-		nameLabel = activeLabel.Render("► Name:")
-	} else {
-		cmdLabel = activeLabel.Render("► Command:")
-	}
-
-	rows := []string{
-		titleStyled,
-		"",
-		nameLabel,
-		"  " + u.serviceForm.nameInput.View(),
-		"",
-		cmdLabel,
-		"  " + u.serviceForm.commandInput.View(),
-	}
-
-	if u.serviceForm.errorMsg != "" {
-		rows = append(rows, "", lipgloss.NewStyle().Foreground(colorError).Render("✗ "+u.serviceForm.errorMsg))
-	}
-
-	body := lipgloss.JoinVertical(lipgloss.Left, rows...)
-	style := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(colorBorder).
-		Padding(0, 1).
-		Width(width - 2)
-
-	box := style.Render(body)
-
-	instructionStyled := renderActionChips([][2]string{
-		{"Tab/↑↓", "switch field"},
-		{"Enter", "save"},
-		{"Esc", "back"},
-	})
-
-	return lipgloss.JoinVertical(lipgloss.Left, box, instructionStyled)
 }

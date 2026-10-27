@@ -90,13 +90,16 @@ type dashLayout struct {
 }
 
 const (
-	dashChrome  = 5 // header + two box borders each; the footer (1–2 lines) is added in layout
+	dashChrome  = 6 // header, spacer, two frame borders each; the key bar (1–2 lines) is added in layout
 	minLogLines = 3
 )
 
 func (u *UI) layout() dashLayout {
 	avail := max(0, u.height-dashChrome-len(u.footerLines(max(1, u.width-2*len(margin)))))
-	n := max(1, len(u.services)) // the empty state takes one line
+	n := len(u.services)
+	if n == 0 {
+		n = 3 // the empty-state starfield
+	}
 
 	l := dashLayout{rows: n}
 	if room := avail - minLogLines; n > room {

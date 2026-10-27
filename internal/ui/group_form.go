@@ -6,7 +6,6 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 
 	"github.com/alinemone/go-port-forward/internal/manager"
 )
@@ -176,110 +175,4 @@ func (u *UI) submitGroupForm() (tea.Model, tea.Cmd) {
 	u.reloadManageRowsFromStorage()
 	u.focusManage(rowGroup, name)
 	return u, u.setStatus(status)
-}
-
-func (u *UI) renderGroupForm() string {
-	width := u.width
-	if width <= 0 {
-		width = 120
-	}
-	if width < 60 {
-		width = 60
-	}
-
-	title := "New group"
-	if u.groupForm.mode == "edit" {
-		title = fmt.Sprintf("Edit group: %s", u.groupForm.originalName)
-	}
-	titleStyled := lipgloss.NewStyle().
-		Foreground(colorAccent).
-		Bold(true).
-		Render(title)
-
-	labelStyle := lipgloss.NewStyle().Foreground(colorMuted)
-	activeLabel := lipgloss.NewStyle().Foreground(colorAccentAlt).Bold(true)
-
-	nameLabel := labelStyle.Render("  Name:")
-	servicesLabel := labelStyle.Render("  Services:")
-	if u.groupForm.focusedField == 0 {
-		nameLabel = activeLabel.Render("► Name:")
-	} else {
-		servicesLabel = activeLabel.Render("► Services:")
-	}
-
-	rows := []string{
-		titleStyled,
-		"",
-		nameLabel,
-		"  " + u.groupForm.nameInput.View(),
-		"",
-		servicesLabel,
-	}
-
-	if len(u.groupForm.serviceNames) == 0 {
-		rows = append(rows, lipgloss.NewStyle().
-			Foreground(colorMuted).
-			Italic(true).
-			Render("  No services available — create services first"))
-	} else {
-		const maxVisible = 20
-		start := 0
-		if u.groupForm.serviceCursor >= maxVisible {
-			start = u.groupForm.serviceCursor - maxVisible + 1
-		}
-		end := start + maxVisible
-		if end > len(u.groupForm.serviceNames) {
-			end = len(u.groupForm.serviceNames)
-		}
-
-		for i := start; i < end; i++ {
-			svc := u.groupForm.serviceNames[i]
-			onCursor := u.groupForm.focusedField == 1 && i == u.groupForm.serviceCursor
-			marker := "  "
-			if onCursor {
-				marker = lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("► ")
-			}
-			checkbox := "[ ]"
-			if u.groupForm.selected[svc] {
-				checkbox = "[✓]"
-			}
-			svcColor := colorText
-			if onCursor {
-				svcColor = colorAccent
-			}
-			line := marker +
-				lipgloss.NewStyle().Foreground(colorMuted).Render(checkbox+" ") +
-				lipgloss.NewStyle().Foreground(svcColor).Render(svc)
-			rows = append(rows, line)
-		}
-
-		if len(u.groupForm.serviceNames) > maxVisible {
-			rows = append(rows, lipgloss.NewStyle().
-				Foreground(colorMuted).
-				Render(fmt.Sprintf("  (%d–%d of %d)", start+1, end, len(u.groupForm.serviceNames))))
-		}
-	}
-
-	if u.groupForm.errorMsg != "" {
-		rows = append(rows, "", lipgloss.NewStyle().Foreground(colorError).Render("✗ "+u.groupForm.errorMsg))
-	}
-
-	body := lipgloss.JoinVertical(lipgloss.Left, rows...)
-	style := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(colorBorder).
-		Padding(0, 1).
-		Width(width - 2)
-
-	box := style.Render(body)
-
-	instructionStyled := renderActionChips([][2]string{
-		{"Tab", "switch field"},
-		{"↑↓", "navigate"},
-		{"Space", "toggle"},
-		{"Enter", "save"},
-		{"Esc", "back"},
-	})
-
-	return lipgloss.JoinVertical(lipgloss.Left, box, instructionStyled)
 }

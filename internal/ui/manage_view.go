@@ -9,19 +9,21 @@ import (
 	"github.com/alinemone/go-port-forward/internal/icons"
 )
 
-func (u *UI) renderManageGroupRow(name string, cursorOn bool, maxNameLen int, running map[string]bool) string {
-	highlight := "  "
-	if cursorOn {
-		highlight = lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("► ")
-	}
-	box := u.renderSelectCheckbox(u.manage.selectedGroups[name])
+// The Hangar: every saved group and service, searchable, with multi-select to
+// launch. Rendering only — keys and state live in manage.go.
 
-	nameColor := colorText
-	if cursorOn {
-		nameColor = colorAccent
+func (u *UI) cursorBar(on bool) string {
+	if on {
+		return fg(colorAccent).Bold(true).Render("▎ ")
 	}
-	styledName := lipgloss.NewStyle().Foreground(nameColor).Bold(true).
-		Render(padRightDisplayWidth(truncateRunes(name, maxNameLen), maxNameLen))
+	return "  "
+}
+
+func (u *UI) renderManageGroupRow(name string, cursorOn bool, maxNameLen int, running map[string]bool) string {
+	nameStyle := lipgloss.NewStyle().Foreground(colorHeading).Bold(true)
+	if cursorOn {
+		nameStyle = nameStyle.Foreground(colorAccent)
+	}
 
 	members := u.manage.groups[name]
 	run := 0
@@ -30,48 +32,47 @@ func (u *UI) renderManageGroupRow(name string, cursorOn bool, maxNameLen int, ru
 			run++
 		}
 	}
-	info := lipgloss.NewStyle().Foreground(colorMuted).
-		Render(fmt.Sprintf("%s  %d/%d running", summarizeMembers(members), run, len(members)))
+	count := fg(colorMuted).Render(fmt.Sprintf("%d/%d running", run, len(members)))
+	if run > 0 {
+		count = fg(statusHealthyColor).Render(fmt.Sprintf("%d", run)) + fg(colorMuted).Render(fmt.Sprintf("/%d running", len(members)))
+	}
 
-	icon := u.overlayIconCell(u.manage.icons.set.ForGroup())
-
-	return highlight + box + " " + icon + styledName + "  " + info
+	return u.cursorBar(cursorOn) +
+		u.renderSelectCheckbox(u.manage.selectedGroups[name]) + " " +
+		u.overlayIconCell(u.manage.icons.set.ForGroup()) +
+		nameStyle.Render(fitWidth(truncateRunes(name, maxNameLen), maxNameLen)) + "   " +
+		count + fg(colorBorder).Render("   ") + fg(colorMuted).Render(summarizeMembers(members))
 }
 
 func (u *UI) renderManageServiceRow(name string, cursorOn bool, maxNameLen int, running map[string]bool) string {
-	highlight := "  "
+	nameStyle := lipgloss.NewStyle().Foreground(colorText)
 	if cursorOn {
-		highlight = lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("► ")
+		nameStyle = nameStyle.Foreground(colorAccent).Bold(true)
 	}
 
-	nameColor := colorText
-	if cursorOn {
-		nameColor = colorAccent
-	}
-	styledName := lipgloss.NewStyle().Foreground(nameColor).Bold(true).
-		Render(padRightDisplayWidth(truncateRunes(name, maxNameLen), maxNameLen))
-
-	var box, indicator string
+	mark, state := u.renderSelectCheckbox(u.manage.selectedServices[name]), fg(colorMuted).Render("○ stopped")
 	if running[name] {
-		box = lipgloss.NewStyle().Foreground(colorMuted).Render("   ")
-		indicator = lipgloss.NewStyle().Foreground(colorAccentAlt).Render("● running")
-	} else {
-		box = u.renderSelectCheckbox(u.manage.selectedServices[name])
-		indicator = lipgloss.NewStyle().Foreground(colorMuted).Render("○ stopped")
+		// Already running: nothing to launch, so no checkbox.
+		mark, state = fg(colorBorder).Render("·"), fg(statusHealthyColor).Render("● running")
 	}
 
-	icon := u.overlayIconCell(u.manage.icons.set.ForPort(u.manage.icons.ports[name]))
+	port := ""
+	if p := u.manage.icons.localPorts[name]; p != "" {
+		port = ":" + p
+	}
 
-	return highlight + box + " " + icon + styledName + "  " + indicator
+	return u.cursorBar(cursorOn) + mark + " " +
+		u.overlayIconCell(u.manage.icons.set.ForPort(u.manage.icons.ports[name])) +
+		nameStyle.Render(fitWidth(truncateRunes(name, maxNameLen), maxNameLen)) + "   " +
+		fg(colorText).Render(fitWidth(port, 6)) + "   " + state
 }
 
-// renderSelectCheckbox draws a multi-select checkbox, brightening to the accent
-// color when ticked so selected rows read at a glance.
+// renderSelectCheckbox is a row's launch mark: ◉ when selected, ○ otherwise.
 func (u *UI) renderSelectCheckbox(selected bool) string {
 	if selected {
-		return lipgloss.NewStyle().Foreground(colorAccentAlt).Bold(true).Render("[✓]")
+		return fg(colorAccentAlt).Bold(true).Render("◉")
 	}
-	return lipgloss.NewStyle().Foreground(colorMuted).Render("[ ]")
+	return fg(colorMuted).Render("○")
 }
 
 // overlayIconCell renders the leading icon cell for an overlay row from an
@@ -83,197 +84,178 @@ func (u *UI) overlayIconCell(icon icons.Icon) string {
 	return renderIconCell(icon.Glyph, icon.Color)
 }
 
+func (u *UI) manageSelectionCount() int {
+	n := 0
+	for _, on := range u.manage.selectedGroups {
+		if on {
+			n++
+		}
+	}
+	for _, on := range u.manage.selectedServices {
+		if on {
+			n++
+		}
+	}
+	return n
+}
+
 func (u *UI) renderManageOverlay() string {
-	width := u.width
-	if width <= 0 {
-		width = 120
+	width := max(24, u.width)
+	height := u.height
+	if height <= 0 {
+		height = 30
 	}
-	if width < 12 {
-		width = 12
-	}
-
+	inner := max(1, width-2*len(margin))
 	running := u.runningNameSet()
-	helpBox := u.renderManageHelp(width)
-	contextPanel := u.renderManageContext(width)
-	dataHeight := 0
-	if u.height > 0 {
-		contextHeight := 0
-		if contextPanel != "" {
-			contextHeight = lipgloss.Height(contextPanel)
-		}
-		dataHeight = u.height - lipgloss.Height(helpBox) - contextHeight
-		if dataHeight < 4 {
-			dataHeight = 4
-		}
+
+	headerRight := ""
+	if n := u.manageSelectionCount(); n > 0 {
+		headerRight = fg(colorAccentAlt).Bold(true).Render(fmt.Sprintf("◉ %d selected", n)) +
+			fg(colorMuted).Render(" · enter to launch")
 	}
 
-	maxNameLen := 7
-	for _, n := range u.manage.groupNames {
-		if len(n) > maxNameLen {
-			maxNameLen = len(n)
-		}
-	}
-	for _, n := range u.manage.serviceNames {
-		if len(n) > maxNameLen {
-			maxNameLen = len(n)
-		}
-	}
-	if maxNameLen > 30 {
-		maxNameLen = 30
-	}
+	keys := keyBar(manageHelpItems(), manageCompactHelpItems(), inner, u.manageStatus())
+	context := u.renderManageContext(width)
+	frameH := max(5, height-2-len(context)-len(keys))
 
-	visible := u.manageVisibleRows(dataHeight)
-	u.ensureManageVisible(visible)
+	// Frame body: search line, spacer, list (+ a range line when it scrolls).
+	listRows := max(1, frameH-2-2)
+	if len(u.manage.rows) > listRows && listRows > 1 {
+		listRows--
+	}
+	u.ensureManageVisible(listRows)
 	start := u.manage.offset
-	end := start + visible
-	if end > len(u.manage.rows) {
-		end = len(u.manage.rows)
-	}
-	if start > end {
-		start = end
-	}
+	end := min(len(u.manage.rows), start+listRows)
 
-	rows := make([]string, 0, end-start+3)
-	rows = append(rows, lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("ADD / EDIT")+
-		lipgloss.NewStyle().Foreground(colorMuted).Render("  — groups & services"))
-	rows = append(rows, u.renderManageSearchLine())
+	maxNameLen := 8
+	for _, n := range append(append([]string{}, u.manage.groupNames...), u.manage.serviceNames...) {
+		maxNameLen = max(maxNameLen, lipgloss.Width(n))
+	}
+	maxNameLen = min(maxNameLen, 28)
+
+	body := []string{u.renderManageSearchLine(), ""}
+	frameInner := width - 4
 	for i := start; i < end; i++ {
 		row := u.manage.rows[i]
 		cursorOn := i == u.manage.cursor
 		switch row.kind {
 		case rowHeaderGroups:
-			rows = append(rows, lipgloss.NewStyle().Foreground(colorHeading).Bold(true).Render("GROUPS"))
+			body = append(body, hudSection("GROUPS", frameInner))
 		case rowHeaderServices:
-			rows = append(rows, lipgloss.NewStyle().Foreground(colorHeading).Bold(true).Render("SERVICES"))
+			body = append(body, hudSection("SERVICES", frameInner))
 		case rowEmptyGroups:
-			text := "  (no groups — Ctrl+N to create)"
-			if u.manage.searchQuery != "" {
-				text = "  (no matching groups)"
-			}
-			rows = append(rows, lipgloss.NewStyle().Foreground(colorMuted).Italic(true).Render(text))
+			body = append(body, u.emptyRowHint("no groups yet — Ctrl+N to create one", "no matching groups"))
 		case rowEmptyServices:
-			text := "  (no services — Ctrl+N to create)"
-			if u.manage.searchQuery != "" {
-				text = "  (no matching services)"
-			}
-			rows = append(rows, lipgloss.NewStyle().Foreground(colorMuted).Italic(true).Render(text))
+			body = append(body, u.emptyRowHint("no services yet — Ctrl+N to create one", "no matching services"))
 		case rowGroup:
-			rows = append(rows, u.renderManageGroupRow(row.name, cursorOn, maxNameLen, running))
+			body = append(body, u.renderManageGroupRow(row.name, cursorOn, maxNameLen, running))
 		case rowService:
-			rows = append(rows, u.renderManageServiceRow(row.name, cursorOn, maxNameLen, running))
+			body = append(body, u.renderManageServiceRow(row.name, cursorOn, maxNameLen, running))
 		}
 	}
-
-	if len(u.manage.rows) > visible {
-		rows = append(rows, lipgloss.NewStyle().Foreground(colorMuted).
-			Render(fmt.Sprintf("(%d–%d of %d)", start+1, end, len(u.manage.rows))))
+	if len(u.manage.rows) > listRows {
+		body = append(body, fg(colorMuted).Render(fmt.Sprintf("%d–%d of %d", start+1, end, len(u.manage.rows))))
 	}
 
-	table := lipgloss.JoinVertical(lipgloss.Left, rows...)
-	overlayStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(colorBorder).
-		Padding(0, 1).
-		Width(width)
-	if dataHeight > 0 {
-		overlayStyle = overlayStyle.Height(dataHeight)
-	}
-	overlayBox := overlayStyle.Render(table)
-
-	sections := []string{overlayBox}
-	if contextPanel != "" {
-		sections = append(sections, contextPanel)
-	}
-	sections = append(sections, helpBox)
-	return lipgloss.JoinVertical(lipgloss.Left, sections...)
+	badge := fg(colorMuted).Render(fmt.Sprintf("%d groups · %d services", len(u.manage.groupNames), len(u.manage.serviceNames)))
+	lines := []string{u.hudHeader("HANGAR", headerRight), ""}
+	lines = append(lines, hudFrame(hudTitle("INVENTORY", ""), badge, body, width, frameH, toneNormal)...)
+	lines = append(lines, context...)
+	lines = append(lines, keys...)
+	return screen(lines, width, height)
 }
 
-func (u *UI) renderManageHelp(width int) string {
-	full := helpItemLines(width, manageHelpItems())
-	if useCompactHelp(u.height, full) {
-		compactItems := []helpItem{
-			{"?", "all shortcuts"},
-			{"↑↓", "choose"},
-			{"Space", "select"},
-			{"Enter", "start"},
-			{"Esc", "back"},
-		}
-		full = helpItemLinesWithSpacing(width, compactItems, false)
-		spaced := helpItemLinesWithSpacing(width, compactItems, true)
-		budget := u.height / 4
-		if budget < 3 {
-			budget = 3
-		}
-		if len(spaced)+2 <= budget {
-			full = spaced
-		}
+func (u *UI) emptyRowHint(empty, noMatch string) string {
+	text := empty
+	if u.manage.searchQuery != "" {
+		text = noMatch
 	}
-	return renderHelpBox(width, full)
+	return "  " + fg(colorMuted).Italic(true).Render(text)
 }
 
-func manageHelpItems() []helpItem {
-	return []helpItem{
-		{"type", "search list"},
-		{"↑↓", "choose item"},
-		{"Space", "select / unselect"},
-		{"Enter", "start selected"},
-		{"Ctrl+N", "create Service"},
-		{"Ctrl+E", "edit current"},
-		{"Ctrl+D", "delete current"},
+// manageStatus is the transient message shown at the end of the key bar.
+func (u *UI) manageStatus() string {
+	switch {
+	case u.manage.errorMsg != "":
+		return "✗ " + u.manage.errorMsg
+	case u.manage.infoMsg != "":
+		return u.manage.infoMsg
+	}
+	return ""
+}
+
+func manageHelpItems() [][2]string {
+	return [][2]string{
+		{"type", "search"},
+		{"↑↓", "choose"},
+		{"Space", "select"},
+		{"Enter", "launch selected"},
+		{"Ctrl+N", "create"},
+		{"Ctrl+E", "edit"},
+		{"Ctrl+D", "delete"},
 		{"Ctrl+C", "edit config file"},
 		{"Esc", "clear search / back"},
+		{"?", "all shortcuts"},
 	}
 }
 
-// renderManageContext keeps transient prompts between the full-height data
-// panel and the bottom-anchored help box. Its measured height is reserved before
-// the data panel is rendered, so the complete layout still fills the terminal.
-func (u *UI) renderManageContext(width int) string {
+func manageCompactHelpItems() [][2]string {
+	return [][2]string{
+		{"↑↓", "move"},
+		{"Space", "select"},
+		{"Enter", "launch"},
+		{"^N", "new"},
+		{"^E", "edit"},
+		{"^D", "delete"},
+		{"^C", "config"},
+		{"Esc", "back"},
+		{"?", "help"},
+	}
+}
+
+// renderManageContext is the prompt or confirmation shown between the
+// inventory and the key bar; nil when there is none.
+func (u *UI) renderManageContext(width int) []string {
 	switch {
 	case u.manage.showNewPrompt:
-		promptText := lipgloss.NewStyle().Foreground(colorAccentAlt).Bold(true).Render("Create new —")
-		promptKeys := renderActionChips([][2]string{{"g", "group"}, {"s", "service"}, {"esc", "cancel"}})
-		promptBody := lipgloss.JoinVertical(lipgloss.Left, promptText, "", promptKeys)
-		return lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(colorBorder).
-			Padding(0, 1).
-			Width(width).
-			Render(promptBody)
+		body := []string{
+			fg(colorText).Render("What do you want to create?") + "   " +
+				actionKeys([][2]string{{"g", "group"}, {"s", "service"}, {"esc", "cancel"}}),
+		}
+		return hudFrame(hudTitle("CREATE", ""), "", body, width, 0, toneNormal)
 	case u.manage.confirmDeleteName != "":
 		msg := fmt.Sprintf("Delete service '%s'? This cannot be undone.", u.manage.confirmDeleteName)
 		if u.manage.confirmDeleteKind == "group" {
-			msg = fmt.Sprintf("Delete group '%s'? Member services are kept.", u.manage.confirmDeleteName)
+			msg = fmt.Sprintf("Delete group '%s'? Its services are kept.", u.manage.confirmDeleteName)
 		}
-		confirmText := lipgloss.NewStyle().Foreground(colorWarn).Bold(true).Render(msg)
-		confirmKeys := renderActionChips([][2]string{{"y", "confirm"}, {"n", "cancel"}})
-		confirmBody := lipgloss.JoinVertical(lipgloss.Left, confirmText, "", confirmKeys)
-		return lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(colorBorder).
-			Padding(0, 1).
-			Width(width).
-			Render(confirmBody)
-	case u.manage.errorMsg != "":
-		return lipgloss.NewStyle().Foreground(colorError).Render("✗ " + u.manage.errorMsg)
-	case u.manage.infoMsg != "":
-		return lipgloss.NewStyle().Foreground(colorAccentAlt).Bold(true).Render(u.manage.infoMsg)
-	default:
-		return ""
+		body := []string{
+			fg(colorWarn).Bold(true).Render(msg) + "   " +
+				actionKeys([][2]string{{"y", "delete"}, {"n", "cancel"}}),
+		}
+		return hudFrame(lipgloss.NewStyle().Foreground(colorWarn).Bold(true).Render("CONFIRM"), "", body, width, 0, toneAlert)
 	}
+	return nil
 }
 
-// renderManageSearchLine renders the always-focused search input shown at the top
-// of the manage overlay. Typing anywhere in the overlay feeds this query.
-func (u *UI) renderManageSearchLine() string {
-	label := lipgloss.NewStyle().Foreground(colorMuted).Render("Search: ")
-	cursor := lipgloss.NewStyle().Foreground(colorAccent).Render("▏")
-	if u.manage.searchQuery == "" {
-		placeholder := lipgloss.NewStyle().Foreground(colorMuted).Italic(true).Render("type to filter…")
-		return label + cursor + placeholder
+// actionKeys renders inline key choices: "g group   s service".
+func actionKeys(pairs [][2]string) string {
+	key := lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
+	chips := make([]string, 0, len(pairs))
+	for _, p := range pairs {
+		chips = append(chips, key.Render(p[0])+" "+fg(colorMuted).Render(p[1]))
 	}
-	query := lipgloss.NewStyle().Foreground(colorAccentAlt).Bold(true).Render(u.manage.searchQuery)
-	return label + query + cursor
+	return strings.Join(chips, "   ")
+}
+
+// renderManageSearchLine is the always-focused scanner input at the top of the
+// inventory. Typing anywhere in the Hangar feeds this query.
+func (u *UI) renderManageSearchLine() string {
+	label := fg(colorAccent).Render("⌕ ") + lipgloss.NewStyle().Foreground(colorHeading).Bold(true).Render("SCAN") + fg(colorBorder).Render("  ▸ ")
+	cursor := fg(colorAccent).Render("▏")
+	if u.manage.searchQuery == "" {
+		return label + cursor + fg(colorMuted).Italic(true).Render("type to filter groups and services…")
+	}
+	return label + fg(colorAccentAlt).Bold(true).Render(u.manage.searchQuery) + cursor
 }
 
 func summarizeMembers(members []string) string {

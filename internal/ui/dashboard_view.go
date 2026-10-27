@@ -8,78 +8,28 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
-	"github.com/charmbracelet/x/ansi"
 
 	"github.com/alinemone/go-port-forward/internal/model"
 )
 
-const margin = "  "
-
-// renderDashboard draws the monitoring screen: header, one line per forward
-// with its live chart, the logs, and the key hints. Every line is exactly the
-// terminal width.
+// renderDashboard draws Mission Control: header, the forwards frame (one line
+// per forward with its live chart), the logs frame, and the key bar. The result
+// is exactly the terminal size.
 func (u *UI) renderDashboard() string {
 	l := u.layout()
 	now := time.Now()
 	inner := max(1, u.width-2*len(margin))
 
-	forwardsTitle := fg(colorHeading).Bold(true).Render("forwards") +
-		fg(colorMuted).Render(fmt.Sprintf(" · %d", len(u.services)))
-
-	lines := []string{u.renderHeader(inner)}
-	lines = append(lines, box(forwardsTitle, u.renderRows(l, inner, now), u.width)...)
-	lines = append(lines, box(u.logsTitle(), strings.Split(u.viewport.View(), "\n"), u.width)...)
+	badge := fg(colorMuted).Render(fmt.Sprintf("%02d LINKS", len(u.services)))
+	lines := []string{u.hudHeader("MISSION CONTROL", u.linkSummary()), ""}
+	lines = append(lines, hudFrame(hudTitle("FORWARDS", ""), badge, u.renderRows(l, inner, now), u.width, 0, toneNormal)...)
+	lines = append(lines, hudFrame(u.logsTitle(), "", u.logsBody(l, inner), u.width, 0, toneNormal)...)
 	lines = append(lines, u.footerLines(inner)...)
-
-	for i := range lines {
-		lines[i] = fitWidth(lines[i], u.width)
-	}
-	return strings.Join(lines, "\n")
+	return screen(lines, u.width, u.height)
 }
 
-// box frames body lines in a rounded border of the given width with the title
-// set into the top edge ("╭─ forwards ───╮"). Body lines are clipped or padded
-// to the inner width (width-4).
-func box(title string, body []string, width int) []string {
-	border := fg(colorBorder)
-	inner := max(1, width-4)
-
-	top := border.Render("╭─") + " " + ansi.Truncate(title, max(1, width-6), "…") + " "
-	if fill := width - 1 - lipgloss.Width(top); fill > 0 {
-		top += border.Render(strings.Repeat("─", fill))
-	}
-	top += border.Render("╮")
-
-	out := make([]string, 0, len(body)+2)
-	out = append(out, top)
-	side := border.Render("│")
-	for _, line := range body {
-		out = append(out, side+" "+fitWidth(line, inner)+" "+side)
-	}
-	return append(out, border.Render("╰"+strings.Repeat("─", max(0, width-2))+"╯"))
-}
-
-// fitWidth pads or clips a styled line to exactly width cells.
-func fitWidth(line string, width int) string {
-	if width <= 0 {
-		return ""
-	}
-	line = ansi.Truncate(line, width, "…")
-	if pad := width - lipgloss.Width(line); pad > 0 {
-		line += strings.Repeat(" ", pad)
-	}
-	return line
-}
-
-func fg(c color.Color) lipgloss.Style { return lipgloss.NewStyle().Foreground(c) }
-
-// ── header ──────────────────────────────────────────────────────────────────
-
-func (u *UI) renderHeader(inner int) string {
-	logo := fg(colorAccent).Render("◆ ") +
-		lipgloss.NewStyle().Foreground(colorText).Bold(true).Render("pf") +
-		fg(colorMuted).Render("  port forward")
-
+// linkSummary counts forwards by status for the header.
+func (u *UI) linkSummary() string {
 	var live, connecting, failed int
 	for i := range u.services {
 		switch u.services[i].Status {
@@ -102,16 +52,10 @@ func (u *UI) renderHeader(inner int) string {
 	if failed > 0 {
 		parts = append(parts, fg(statusErrorColor).Render(fmt.Sprintf("✕ %d error", failed)))
 	}
-	summary := strings.Join(parts, "   ")
-	if summary == "" {
-		summary = fg(colorMuted).Render("idle")
+	if len(parts) == 0 {
+		return fg(colorMuted).Render("standing by")
 	}
-
-	gap := inner - lipgloss.Width(logo) - lipgloss.Width(summary)
-	if gap < 2 {
-		return margin + logo
-	}
-	return margin + logo + strings.Repeat(" ", gap) + summary
+	return strings.Join(parts, "   ")
 }
 
 func (u *UI) spinner() string {
@@ -171,11 +115,10 @@ func computeRowColumns(services []model.Service, inner int) rowColumns {
 
 func (u *UI) renderRows(l dashLayout, inner int, now time.Time) []string {
 	if len(u.services) == 0 {
-		return []string{
-			fg(colorMuted).Render("No forwards running — press ") +
-				lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("a") +
-				fg(colorMuted).Render(" to start one."),
-		}
+		msg := fg(colorMuted).Render("no active links — press ") +
+			lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("a") +
+			fg(colorMuted).Render(" to launch one")
+		return starfield(inner, l.rows, 3, u.spinnerFrame, msg)
 	}
 
 	u.ensureCursorVisible(l.rows)
@@ -291,11 +234,27 @@ func (u *UI) iconColor(svc *model.Service, c color.Color) color.Color {
 // ── logs ────────────────────────────────────────────────────────────────────
 
 func (u *UI) logsTitle() string {
-	title := fg(colorHeading).Bold(true).Render("logs") + fg(colorMuted).Render(" · ")
+	title := lipgloss.NewStyle().Foreground(colorHeading).Bold(true).Render("LOGS") + fg(colorMuted).Render(" · ")
 	if scope := u.logScope(); scope != "" {
 		return title + fg(serviceHue(scope)).Render(scope)
 	}
 	return title + fg(colorMuted).Render("all")
+}
+
+// logsBody is the log viewport, or — while there is nothing to read yet — a
+// quiet starfield, so an empty pane reads as "waiting", not "broken".
+func (u *UI) logsBody(l dashLayout, inner int) []string {
+	empty := true
+	for i := range u.services {
+		if scope := u.logScope(); (scope == "" || u.services[i].Name == scope) && len(u.services[i].Logs) > 0 {
+			empty = false
+			break
+		}
+	}
+	if empty {
+		return starfield(inner, l.logs, 7, u.spinnerFrame, fg(colorMuted).Italic(true).Render("awaiting telemetry…"))
+	}
+	return strings.Split(u.viewport.View(), "\n")
 }
 
 // renderLogsContent merges the services' logs in time order. With showNames
@@ -383,66 +342,26 @@ func (u *UI) footerItems(compact bool) [][2]string {
 	)
 }
 
-const maxFooterLines = 2
-
-// packHints lays the hints out left to right, wrapping onto as many lines as
-// needed.
-func packHints(items [][2]string, inner int, gap string) []string {
-	key := lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
-	desc := fg(colorMuted)
-
-	lines := []string{""}
-	for _, item := range items {
-		hint := key.Render(item[0]) + " " + desc.Render(item[1])
-		last := &lines[len(lines)-1]
-		switch {
-		case *last == "":
-			*last = hint
-		case lipgloss.Width(*last)+len(gap)+lipgloss.Width(hint) <= inner:
-			*last += gap + hint
-		default:
-			lines = append(lines, hint)
-		}
-	}
-	return lines
-}
-
-// footerLines shows every key hint — never silently dropping one on a narrow
-// terminal: full labels when they fit in two lines, else compact labels (on
-// more lines only if the terminal is tiny). A transient status message takes
-// the right end of the last line, or the line itself when there is no room.
+// footerLines is the dashboard key bar.
 func (u *UI) footerLines(inner int) []string {
-	lines := packHints(u.footerItems(false), inner, "   ")
-	if len(lines) > maxFooterLines {
-		lines = packHints(u.footerItems(true), inner, "  ")
-	}
-
-	if u.editStatus != "" {
-		statusColor := colorAccentAlt
-		if strings.HasPrefix(u.editStatus, "✗") {
-			statusColor = colorError
-		}
-		status := fg(statusColor).Render(u.editStatus)
-		last := &lines[len(lines)-1]
-		if gap := inner - lipgloss.Width(*last) - lipgloss.Width(status); gap >= 3 {
-			*last += strings.Repeat(" ", gap) + status
-		} else {
-			*last = status
-		}
-	}
-
-	for i := range lines {
-		lines[i] = margin + lines[i]
-	}
-	return lines
+	return keyBar(u.footerItems(false), u.footerItems(true), inner, u.editStatus)
 }
 
 // ── shutdown ────────────────────────────────────────────────────────────────
 
 func (u *UI) renderShutdownScreen() string {
-	msg := fg(colorAccentAlt).Bold(true).Render(u.spinner() + "  stopping forwards…")
+	msg := fg(colorAccent).Render(u.spinner()+"  ") +
+		lipgloss.NewStyle().Foreground(colorHeading).Bold(true).Render("DISENGAGING") +
+		fg(colorMuted).Render(fmt.Sprintf("  ·  closing %d link%s and releasing ports", len(u.services), plural(len(u.services))))
 	if u.width <= 0 || u.height <= 0 {
 		return msg
 	}
-	return lipgloss.Place(u.width, u.height, lipgloss.Center, lipgloss.Center, msg)
+	return screen(starfield(u.width, u.height, 5, u.spinnerFrame, msg), u.width, u.height)
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
 }

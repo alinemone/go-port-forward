@@ -64,9 +64,23 @@ func (c *apiClient) get(ctx context.Context, path string, query url.Values, out 
 		// `services "db" not found` or a forbidden message.
 		var status metav1.Status
 		if json.Unmarshal(body, &status) == nil && status.Message != "" {
-			return errors.New(status.Message)
+			return &apiError{code: resp.StatusCode, msg: status.Message}
 		}
-		return fmt.Errorf("GET %s: %s", u.Path, resp.Status)
+		return &apiError{code: resp.StatusCode, msg: fmt.Sprintf("GET %s: %s", u.Path, resp.Status)}
 	}
 	return json.Unmarshal(body, out)
+}
+
+// apiError is a non-200 API response, keeping the status code so callers can
+// tell "gone" (404) from "unreachable" or "forbidden".
+type apiError struct {
+	code int
+	msg  string
+}
+
+func (e *apiError) Error() string { return e.msg }
+
+func isNotFound(err error) bool {
+	var apiErr *apiError
+	return errors.As(err, &apiErr) && apiErr.code == http.StatusNotFound
 }

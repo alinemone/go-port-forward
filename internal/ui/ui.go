@@ -80,7 +80,8 @@ type UI struct {
 	lastLogVersion    string
 	helpVisible       bool
 
-	traffic map[string]*traffic // per-service throughput history for the charts
+	traffic   map[string]*traffic // per-service throughput history for the charts
+	startedAt time.Time           // mission clock origin (T+ in every header)
 }
 
 const uiTickInterval = 500 * time.Millisecond
@@ -93,6 +94,7 @@ func NewUI(ctx context.Context, mgr Controller, store *storage.Storage) *UI {
 		services:     []model.Service{},
 		ctx:          ctx,
 		aliasEnabled: aliasEnabled,
+		startedAt:    time.Now(),
 	}
 }
 

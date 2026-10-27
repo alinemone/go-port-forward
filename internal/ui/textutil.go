@@ -87,14 +87,6 @@ func truncateRunes(text string, max int) string {
 	return string(runes[:max-3]) + "..."
 }
 
-func padRightRunes(text string, width int) string {
-	runes := []rune(text)
-	if len(runes) >= width {
-		return text
-	}
-	return text + strings.Repeat(" ", width-len(runes))
-}
-
 func padRightDisplayWidth(text string, width int) string {
 	textWidth := lipgloss.Width(text)
 	if textWidth >= width {
@@ -123,15 +115,4 @@ func renderIconCell(glyph, colorHex string) string {
 	}
 	styled := lipgloss.NewStyle().Foreground(lipgloss.Color(colorHex)).Render(glyph)
 	return padRightDisplayWidth(styled+" ", 2)
-}
-
-func renderActionChips(pairs [][2]string) string {
-	keyStyle := lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
-	descStyle := lipgloss.NewStyle().Foreground(colorMuted)
-	sep := descStyle.Render("  •  ")
-	chips := make([]string, 0, len(pairs))
-	for _, p := range pairs {
-		chips = append(chips, keyStyle.Render(p[0])+descStyle.Render(" "+p[1]))
-	}
-	return strings.Join(chips, sep)
 }

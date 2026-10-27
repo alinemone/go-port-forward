@@ -6,105 +6,51 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
+// The Flight Manual: every shortcut of the current page, by category.
+
 type shortcutSection struct {
 	title string
 	items []helpItem
 }
 
 func (u *UI) renderShortcutOverlay(manage bool) string {
-	width, height := u.width, u.height
-	if width < 12 {
-		width = 12
-	}
-	if height < 5 {
-		height = 5
-	}
+	width := max(24, u.width)
+	height := max(6, u.height)
+	inner := max(1, width-2*len(margin))
+	frameInner := width - 4
 
 	sections := u.dashboardShortcutSections()
+	page := "mission control"
 	if manage {
 		sections = manageShortcutSections()
+		page = "hangar"
 	}
 
-	title := lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("SHORTCUTS")
-	closeHint := lipgloss.NewStyle().Foreground(colorMuted).Render("? / Esc: close")
-	innerWidth := width - 6 // border + horizontal padding
-	if innerWidth < 6 {
-		innerWidth = 6
-	}
+	keys := keyBar([][2]string{{"?", "close"}, {"Esc", "close"}}, nil, inner, "")
+	frameH := max(3, height-2-len(keys))
 
-	categorized := lipgloss.JoinVertical(lipgloss.Left, title, closeHint, "", renderShortcutSections(sections, innerWidth))
-	var content string
-	// Choose the dense overlay from its measured height, not a fixed terminal
-	// breakpoint; two-column layouts often fit categories at the same height
-	// where a narrow single-column layout does not.
-	tiny := lipgloss.Height(categorized)+4 > height // vertical padding + border
-	if tiny {
-		// Extremely short splits prioritize density. The same complete key set is
-		// shown as an unspaced grid, without category headings consuming rows.
-		items := compactOverlayItems(manage, u.aliasEnabled)
-		grid := helpItemLinesWithSpacing(innerWidth+4, items, false)
-		spacedGrid := helpItemLinesWithSpacing(innerWidth+4, items, true)
-		// Prefer breathing room even in the compact overlay whenever it still
-		// fits; only genuinely short splits fall back to dense rows.
-		if len(spacedGrid)+3 <= height {
-			grid = spacedGrid
+	body := append([]string{""}, strings.Split(renderShortcutSections(sections, frameInner), "\n")...)
+	if len(body) > frameH-2 {
+		// Too short for the categorized layout: the same keys as a dense grid.
+		body = helpItemLinesWithSpacing(frameInner+4, flattenSections(sections), false)
+		if len(body) > frameH-2 && frameH > 2 {
+			body = body[:frameH-2]
+			body[len(body)-1] = fg(colorWarn).Render(truncateRunes("… enlarge the terminal for every shortcut", frameInner))
 		}
-		tinyHeader := title + lipgloss.NewStyle().Foreground(colorMuted).Render("  ?: close")
-		if lipgloss.Width(tinyHeader) > innerWidth {
-			tinyHeader = lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("HELP")
-		}
-		content = lipgloss.JoinVertical(lipgloss.Left, tinyHeader, strings.Join(grid, "\n"))
-	} else {
-		content = categorized
 	}
 
-	verticalPadding := 1
-	if tiny {
-		verticalPadding = 0
-		content = fitHelpOverlayHeight(content, height-2, innerWidth)
-	}
-	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(colorBorder).
-		Padding(verticalPadding, 2).
-		Width(width).
-		Height(height).
-		Render(content)
+	lines := []string{u.hudHeader("FLIGHT MANUAL", ""), ""}
+	lines = append(lines, hudFrame(hudTitle("SHORTCUTS", page), "", body, width, frameH, toneNormal)...)
+	lines = append(lines, keys...)
+	return screen(lines, width, height)
 }
 
-func compactOverlayItems(manage, aliasEnabled bool) []helpItem {
-	if manage {
-		return manageHelpItems()
-	}
-	items := []helpItem{
-		{"↑↓ / J K", "choose service"},
-		{"PgUp / PgDn", "scroll logs"},
-		{"L / Ctrl+L", "switch / clear logs"},
-		{"R", "restart selected"},
-		{"Ctrl+R", "restart all"},
-		{"S", "stop selected"},
-		{"A", "add/edit services"},
-		{"C", "edit config"},
-		{"Q", "quit & stop all"},
-	}
-	if aliasEnabled {
-		items = append(items, helpItem{"Y", "copy alias"})
+func flattenSections(sections []shortcutSection) []helpItem {
+	var items []helpItem
+	for _, s := range sections {
+		items = append(items, s.items...)
 	}
 	return items
-}
-
-func fitHelpOverlayHeight(content string, maxLines, width int) string {
-	if maxLines < 1 {
-		maxLines = 1
-	}
-	lines := strings.Split(content, "\n")
-	if len(lines) <= maxLines {
-		return content
-	}
-	lines = lines[:maxLines]
-	message := truncateRunes("… enlarge terminal for more shortcuts", width)
-	lines[maxLines-1] = lipgloss.NewStyle().Foreground(colorWarn).Render(message)
-	return strings.Join(lines, "\n")
 }
 
 func (u *UI) dashboardShortcutSections() []shortcutSection {
@@ -112,7 +58,7 @@ func (u *UI) dashboardShortcutSections() []shortcutSection {
 		{"R", "restart selected service"},
 		{"Ctrl+R", "restart all services"},
 		{"S", "stop selected service"},
-		{"A", "add or edit services"},
+		{"A", "add or edit services & groups"},
 	}
 	if u.aliasEnabled {
 		serviceItems = append(serviceItems, helpItem{"Y", "copy selected alias"})
@@ -180,15 +126,18 @@ func renderShortcutSections(sections []shortcutSection, width int) string {
 	return strings.Join(blocks, "\n\n")
 }
 
+// renderShortcutSection is one category: a divider heading, then aligned
+// key → description rows.
 func renderShortcutSection(section shortcutSection, width int) string {
-	heading := lipgloss.NewStyle().Foreground(colorHeading).Bold(true).Render(section.title)
-	keyStyle := lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
-	descStyle := lipgloss.NewStyle().Foreground(colorMuted)
-	lines := []string{heading, ""}
+	keyWidth := 0
 	for _, item := range section.items {
-		maxDescription := width - lipgloss.Width(item.key) - 2
-		description := truncateRunes(item.description, maxDescription)
-		lines = append(lines, keyStyle.Render(item.key)+descStyle.Render(": "+description))
+		keyWidth = max(keyWidth, lipgloss.Width(item.key))
+	}
+	keyStyle := lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
+	lines := []string{hudSection(section.title, width)}
+	for _, item := range section.items {
+		description := truncateRunes(item.description, max(1, width-keyWidth-3))
+		lines = append(lines, keyStyle.Render(fitWidth(item.key, keyWidth))+"   "+fg(colorMuted).Render(description))
 	}
 	return strings.Join(lines, "\n")
 }

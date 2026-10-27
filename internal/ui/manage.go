@@ -37,9 +37,10 @@ func (r manageRow) selectable() bool {
 // each service's main port. Loaded once when the overlay opens rather than per
 // render, and grouped here so the icon feature stays cohesive and easy to grow.
 type overlayIcons struct {
-	set     *icons.Set
-	enabled bool
-	ports   map[string]string // service name → main port
+	set        *icons.Set
+	enabled    bool
+	ports      map[string]string // service name → main port
+	localPorts map[string]string // service name → local port
 }
 
 // manageState is the full state of the unified manage overlay: the combined
@@ -141,16 +142,19 @@ func (u *UI) reloadManageRowsFromStorage() {
 		commands = nil
 	}
 	ports := make(map[string]string, len(commands))
+	localPorts := make(map[string]string, len(commands))
 	for name, command := range commands {
-		if _, main := storage.ParsePortsFromCommand(command); main != "" {
+		local, main := storage.ParsePortsFromCommand(command)
+		if main != "" {
 			ports[name] = main
 		}
+		localPorts[name] = local
 	}
 
 	u.manage.groups = groups
 	u.manage.groupNames = groupNames
 	u.manage.serviceNames = svcNames
-	u.manage.icons = overlayIcons{set: iconSet, enabled: iconsEnabled, ports: ports}
+	u.manage.icons = overlayIcons{set: iconSet, enabled: iconsEnabled, ports: ports, localPorts: localPorts}
 
 	if u.manage.selectedGroups != nil {
 		valid := make(map[string]bool, len(groupNames))
@@ -480,22 +484,6 @@ func (u *UI) runManageSelection() bool {
 	}
 	u.services = u.manager.ListServiceStates()
 	return true
-}
-
-func (u *UI) manageVisibleRows(dataHeight int) int {
-	if dataHeight <= 0 {
-		return 30
-	}
-	// Border, title, and search consume four lines. If the list is truncated,
-	// reserve one more line for its range indicator.
-	v := dataHeight - 4
-	if v < 1 {
-		v = 1
-	}
-	if len(u.manage.rows) > v && v > 1 {
-		v--
-	}
-	return v
 }
 
 func (u *UI) ensureManageVisible(visible int) {

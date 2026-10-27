@@ -8,10 +8,6 @@ import (
 
 type helpItem struct{ key, description string }
 
-func helpItemLines(width int, items []helpItem) []string {
-	return helpItemLinesWithSpacing(width, items, true)
-}
-
 func helpItemLinesWithSpacing(width int, items []helpItem, addRowSpacing bool) []string {
 	if width < 8 {
 		width = 8
@@ -55,31 +51,6 @@ func helpItemLinesWithSpacing(width int, items []helpItem, addRowSpacing bool) [
 		spaced = append(spaced, line)
 	}
 	return spaced
-}
-
-func useCompactHelp(height int, fullLines []string) bool {
-	if height <= 0 {
-		return false
-	}
-	budget := height / 4
-	if budget < 3 {
-		budget = 3
-	}
-	return len(fullLines)+2 > budget
-}
-
-func renderHelpBox(width int, lines []string) string {
-	boxWidth := width
-	if boxWidth < 12 {
-		boxWidth = 12
-	}
-	help := strings.Join(lines, "\n")
-	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(colorBorder).
-		Padding(0, 1).
-		Width(boxWidth).
-		Render(help)
 }
 
 func helpGridLines(styled []string, widths []int, inner int) []string {

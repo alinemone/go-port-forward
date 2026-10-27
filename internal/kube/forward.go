@@ -99,6 +99,10 @@ func Forward(ctx context.Context, spec Spec, opts Options, hooks Hooks) error {
 	}
 	defer conn.Close()
 
+	watchCtx, stopWatch := context.WithCancel(ctx)
+	defer stopWatch()
+	go watchPod(watchCtx, api.get, ns, pod, conn, hooks.Log)
+
 	addresses := spec.Addresses
 	if len(addresses) == 0 {
 		addresses = []string{"localhost"}
