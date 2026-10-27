@@ -7,28 +7,47 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+	"github.com/lucasb-eyer/go-colorful"
+
+	"github.com/alinemone/go-port-forward/internal/theme"
 )
 
-// serviceHues gives every service a stable identity color, used for its chart
-// and its name in the logs. Cool, saturated hues only: green, yellow and red
-// stay reserved for status so a service's color never reads as its health.
-var serviceHues = []string{
-	"#2DD4BF", // teal
-	"#38BDF8", // sky
-	"#818CF8", // indigo
-	"#A78BFA", // violet
-	"#F472B6", // pink
-	"#E879F9", // fuchsia
-	"#67E8F9", // cyan
-	"#FDA4AF", // rose
+// serviceHues gives every service an identity color, used for its chart and its
+// name in the logs. They are derived from the active theme (see
+// deriveServiceHues), so switching themes recolors the whole dashboard.
+var serviceHues []color.Color
+
+// hueOffsets are the steps (degrees around the color wheel) from the theme's
+// accent to each service color. 20° apart keeps all eight within the theme's
+// family while staying tellable apart.
+var hueOffsets = []float64{0, 20, -20, 40, -40, 60, -60, 80}
+
+// deriveServiceHues builds the service palette from the theme accent by
+// rotating its hue in CIE-LCh, which keeps every color as light and as vivid
+// as the accent itself — so each theme gets its own family (teal/cyan for
+// default, blues for ocean, ambers and pinks for sunset), custom themes too.
+func deriveServiceHues(accent string) []color.Color {
+	base, err := colorful.Hex(accent)
+	if err != nil {
+		base, _ = colorful.Hex("#2DD4BF")
+	}
+	h, c, l := base.Hcl()
+	out := make([]color.Color, len(hueOffsets))
+	for i, off := range hueOffsets {
+		out[i] = colorful.Hcl(math.Mod(h+off+360, 360), c, l).Clamped()
+	}
+	return out
 }
 
 // serviceHue picks a service's color from its name, so the same service keeps
-// the same color across runs.
+// the same color across runs (within a theme).
 func serviceHue(name string) color.Color {
+	if len(serviceHues) == 0 {
+		serviceHues = deriveServiceHues(theme.Active.Accent)
+	}
 	h := fnv.New32a()
 	h.Write([]byte(name))
-	return lipgloss.Color(serviceHues[h.Sum32()%uint32(len(serviceHues))])
+	return serviceHues[h.Sum32()%uint32(len(serviceHues))]
 }
 
 // Braille dot bits, bottom row first, for the left and right sub-columns of a

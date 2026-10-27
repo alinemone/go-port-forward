@@ -45,4 +45,5 @@ func ApplyTheme() {
 	colorError = lipgloss.Color(p.Error)
 	colorHeading = lipgloss.Color(p.Heading)
 	colorSelected = lipgloss.Color(p.Selected)
+	serviceHues = deriveServiceHues(p.Accent)
 }
