@@ -172,6 +172,7 @@ pf list
 | Command | Alias | Description |
 |---------|-------|-------------|
 | `add`   | `a`   | Add new service |
+| `discover [ns]` | `scan` | Scan a namespace and add its databases/caches as services |
 | `list`  | `l`   | List all services |
 | `kubectl` | `k` | Run any kubectl command with configured certificate |
 | `run`   | `r`   | Run services with TUI |
@@ -617,6 +618,27 @@ pf cleanup
 pf cleanup --all
 ```
 
+## 🔭 Discover services from a namespace
+
+Instead of writing port-forward commands by hand, let pf find them:
+
+```bash
+pf discover prod-salam-gate     # or: pf discover   (then pick the namespace)
+```
+
+or, inside the live view, press **d** (or **a**, then **Ctrl+N** and **d** from the add/edit screen). Three steps:
+
+1. **Target** — the kube context (Ctrl+T switches) and the namespace. Namespaces are
+   suggested from the cluster, or from your saved services when you can't list them.
+2. **Select** — every service of the namespace, grouped: *suggested* data stores
+   (the Postgres proxy, Redis haproxy, Kafka bootstrap, …) come pre-selected; replicas,
+   per-pod and headless services are listed under *more*; apps under *other*.
+   Services you already saved are marked.
+3. **Review** — each one gets a proposed name (`salam-gate-pg`), a free local port and
+   the generated command, all editable; problems are flagged before saving. **Enter**
+   adds them all to `services.json` (and, in the live view, selects them so Enter
+   launches them).
+
 ## 🎮 TUI Controls
 
 Each running forward is one line — status, local port, uptime — followed by a live
@@ -635,6 +657,7 @@ When running services:
 - **Ctrl+R** - Restart all services
 - **s** - Stop the selected service
 - **a** - Add another stored service to the running set
+- **d** - Discover a namespace's databases & caches and add them (see above)
 - **c** - Bulk-edit configuration in `$EDITOR`
 - **y** - Copy the selected service's cluster-host alias (shown only when `pf alias` is on)
 - **q** / **Ctrl+C** - Quit and stop all services (Esc no longer quits, so a stray key can't drop every forward)

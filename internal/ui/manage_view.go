@@ -190,7 +190,7 @@ func manageHelpItems() [][2]string {
 		{"↑↓", "choose"},
 		{"Space", "select"},
 		{"Enter", "launch selected"},
-		{"Ctrl+N", "create"},
+		{"Ctrl+N", "create / discover"},
 		{"Ctrl+E", "edit"},
 		{"Ctrl+D", "delete"},
 		{"Ctrl+C", "edit config file"},
@@ -204,7 +204,7 @@ func manageCompactHelpItems() [][2]string {
 		{"↑↓", "move"},
 		{"Space", "select"},
 		{"Enter", "launch"},
-		{"^N", "new"},
+		{"^N", "new/discover"},
 		{"^E", "edit"},
 		{"^D", "delete"},
 		{"^C", "config"},
@@ -220,7 +220,7 @@ func (u *UI) renderManageContext(width int) []string {
 	case u.manage.showNewPrompt:
 		body := []string{
 			fg(colorText).Render("What do you want to create?") + "   " +
-				actionKeys([][2]string{{"g", "group"}, {"s", "service"}, {"esc", "cancel"}}),
+				actionKeys([][2]string{{"g", "group"}, {"s", "service"}, {"d", "discover from a namespace"}, {"esc", "cancel"}}),
 		}
 		return hudFrame(hudTitle("CREATE", ""), "", body, width, 0, toneNormal)
 	case u.manage.confirmDeleteName != "":

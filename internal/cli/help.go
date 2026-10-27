@@ -46,6 +46,7 @@ func showUsage() {
 
 	uHead("SERVICES:")
 	uRow(27, `a, add <name> "<command>"`, "Add a new service")
+	uRow(27, "discover [namespace]", "Scan a namespace and add its databases/caches as services")
 	uRow(27, "l, list", "List all saved services")
 	uRow(27, "r, run <names>", "Run one or more services in the live view (comma-separated)")
 	uRow(27, "ra, run all", "Run every saved service")

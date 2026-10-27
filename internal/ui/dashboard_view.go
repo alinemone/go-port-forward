@@ -117,7 +117,9 @@ func (u *UI) renderRows(l dashLayout, inner int, now time.Time) []string {
 	if len(u.services) == 0 {
 		msg := fg(colorMuted).Render("no active links — press ") +
 			lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("a") +
-			fg(colorMuted).Render(" to launch one")
+			fg(colorMuted).Render(" to launch one, or ") +
+			lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("d") +
+			fg(colorMuted).Render(" to discover a namespace")
 		return starfield(inner, l.rows, 3, u.spinnerFrame, msg)
 	}
 
@@ -335,6 +337,7 @@ func (u *UI) footerItems(compact bool) [][2]string {
 	}
 	return append(items,
 		[2]string{"a", label("add/edit services", "add/edit")},
+		[2]string{"d", label("discover namespace", "discover")},
 		[2]string{"c", label("edit config", "config")},
 		[2]string{label("r/Ctrl+R", "r/^R"), label("restart selected / all", "restart")},
 		[2]string{"s", label("stop selected", "stop")},

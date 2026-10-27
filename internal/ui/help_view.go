@@ -59,6 +59,7 @@ func (u *UI) dashboardShortcutSections() []shortcutSection {
 		{"Ctrl+R", "restart all services"},
 		{"S", "stop selected service"},
 		{"A", "add or edit services & groups"},
+		{"D", "discover DBs & caches in a namespace"},
 	}
 	if u.aliasEnabled {
 		serviceItems = append(serviceItems, helpItem{"Y", "copy selected alias"})
@@ -94,6 +95,7 @@ func manageShortcutSections() []shortcutSection {
 		}},
 		{title: "MANAGEMENT", items: []helpItem{
 			{"Ctrl+N", "create item"},
+			{"Ctrl+N, D", "discover from a namespace"},
 			{"Ctrl+E", "edit current item"},
 			{"Ctrl+D", "delete current item"},
 		}},

@@ -69,6 +69,7 @@ type UI struct {
 	serviceForm serviceFormState // add/edit service form, launched from the manage overlay
 	groupForm   groupFormState   // add/edit group form, launched from the manage overlay
 	manage      manageState      // unified manage overlay (groups + services in one list)
+	discover    discoverState    // namespace discovery wizard (Hangar → Ctrl+N → d, or `pf discover`)
 
 	editStatus        string
 	editStatusSeq     int
@@ -138,6 +139,14 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.MouseWheelMsg:
 		switch {
+		case u.discover.active:
+			if u.discover.step == stepSelect {
+				k := tea.KeyPressMsg{Code: tea.KeyDown}
+				if msg.Button == tea.MouseWheelUp {
+					k = tea.KeyPressMsg{Code: tea.KeyUp}
+				}
+				return u.updateDiscover(k)
+			}
 		case u.manage.active:
 			if u.serviceForm.mode == "" && u.groupForm.mode == "" {
 				switch msg.Button {
@@ -156,6 +165,9 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return u, nil
 		}
 		key := normalizeKeyToken(msg)
+		if u.discover.active {
+			return u.updateDiscover(msg)
+		}
 		// Forms accept arbitrary text, so '?' remains input while editing a field.
 		// Everywhere else it opens the page-specific shortcut reference.
 		formActive := u.manage.active && (u.serviceForm.mode != "" || u.groupForm.mode != "")
@@ -224,6 +236,14 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "g":
 			u.enterManageMode(false)
+
+		case "d":
+			// Discovery runs on top of the Hangar so saved services land there,
+			// selected and ready to launch; cancelling comes straight back here.
+			u.enterManageMode(true)
+			cmd := u.openDiscover("", false)
+			u.discover.fromDashboard = true
+			return u, cmd
 
 		case "c":
 			return u, u.launchEditor()
@@ -306,6 +326,12 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return u, tickCmd(uiTickInterval)
 
 	default:
+		if handled, cmd := u.handleDiscoverMsg(msg); handled {
+			return u, cmd
+		}
+		if u.discover.active {
+			return u.updateDiscover(msg)
+		}
 		if u.manage.active {
 			return u.forwardOverlayInput(msg)
 		}
@@ -362,6 +388,9 @@ func (u *UI) viewContent() string {
 
 	if !u.ready {
 		return "Initializing..."
+	}
+	if u.discover.active {
+		return u.renderDiscover()
 	}
 	if u.helpVisible {
 		return u.renderShortcutOverlay(u.manage.active)

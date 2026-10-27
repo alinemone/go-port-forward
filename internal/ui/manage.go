@@ -366,6 +366,9 @@ func (u *UI) updateManageMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "s":
 			u.manage.showNewPrompt = false
 			return u, u.openNewServiceForm()
+		case "d":
+			u.manage.showNewPrompt = false
+			return u, u.openDiscover("", false)
 		case "n", "esc":
 			u.manage.showNewPrompt = false
 		}

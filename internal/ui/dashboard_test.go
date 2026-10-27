@@ -345,7 +345,8 @@ func TestFooterListsEveryKey(t *testing.T) {
 		// Each key must be present, in its full or (narrow terminal) compact label.
 		for _, want := range [][2]string{
 			{"L/Ctrl+L view / clear logs", "L/^L logs"}, {"y copy alias", "y copy"},
-			{"a add/edit services", "a add/edit"}, {"c edit config", "c config"},
+			{"a add/edit services", "a add/edit"}, {"d discover namespace", "d discover"},
+			{"c edit config", "c config"},
 			{"r/Ctrl+R restart selected / all", "r/^R restart"}, {"s stop selected", "s stop"},
 			{"q quit & stop all", "q quit"},
 		} {
