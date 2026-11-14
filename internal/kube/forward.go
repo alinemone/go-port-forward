@@ -47,7 +47,7 @@ type Options struct {
 type Hooks struct {
 	Log    func(message string, isError bool)
 	Ready  func()                      // called once the local listeners are up
-	Target func(pod, namespace string) // called once the target is resolved to a pod
+	Target func(pod, namespace, kubeContext string) // called once the target is resolved to a pod
 	Stats  *Stats                      // connection/traffic counters; may be nil
 }
 
@@ -63,7 +63,7 @@ func Forward(ctx context.Context, spec Spec, opts Options, hooks Hooks) error {
 		hooks.Stats = &Stats{}
 	}
 
-	cfg, ns, err := restConfig(spec, opts)
+	cfg, ns, kubeContext, err := restConfig(spec, opts)
 	if err != nil {
 		return err
 	}
@@ -83,7 +83,7 @@ func Forward(ctx context.Context, spec Spec, opts Options, hooks Hooks) error {
 	}
 	hooks.Log(fmt.Sprintf("%s → pod %s (namespace %s)", spec.Target(), pod.Name, ns), false)
 	if hooks.Target != nil {
-		hooks.Target(pod.Name, ns)
+		hooks.Target(pod.Name, ns, kubeContext)
 	}
 
 	logger := logr.New(&logSink{log: hooks.Log})
@@ -148,8 +148,9 @@ func dial(ctx context.Context, dialer httpstream.Dialer) (httpstream.Connection,
 
 // restConfig builds the client config the way kubectl does for the same flags:
 // the default kubeconfig loading rules (KUBECONFIG, ~/.kube/config) plus
-// command-line overrides.
-func restConfig(spec Spec, opts Options) (*rest.Config, string, error) {
+// command-line overrides. It also returns the namespace and the name of the
+// kube context actually in use (--context, else the kubeconfig's current one).
+func restConfig(spec Spec, opts Options) (*rest.Config, string, string, error) {
 	rules := clientcmd.NewDefaultClientConfigLoadingRules()
 	rules.ExplicitPath = spec.Kubeconfig
 
@@ -170,7 +171,7 @@ func restConfig(spec Spec, opts Options) (*rest.Config, string, error) {
 	clientConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, overrides)
 	cfg, err := clientConfig.ClientConfig()
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	// Server-side deprecation warnings would otherwise print to stderr.
 	cfg.WarningHandler = rest.NoWarnings{}
@@ -178,10 +179,17 @@ func restConfig(spec Spec, opts Options) (*rest.Config, string, error) {
 	ns := spec.Namespace
 	if ns == "" {
 		if ns, _, err = clientConfig.Namespace(); err != nil {
-			return nil, "", err
+			return nil, "", "", err
 		}
 	}
-	return cfg, ns, nil
+
+	kubeContext := spec.Context
+	if kubeContext == "" {
+		if raw, err := clientConfig.RawConfig(); err == nil {
+			kubeContext = raw.CurrentContext
+		}
+	}
+	return cfg, ns, kubeContext, nil
 }
 
 // newDialer prefers the WebSocket tunnel (the default since kubectl 1.31) and

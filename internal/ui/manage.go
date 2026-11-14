@@ -485,7 +485,7 @@ func (u *UI) runManageSelection() bool {
 			start(s)
 		}
 	}
-	u.services = u.manager.ListServiceStates()
+	u.loadServices()
 	return true
 }
 

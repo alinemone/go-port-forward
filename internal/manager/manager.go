@@ -48,6 +48,7 @@ type runningService struct {
 	logs          []model.LogEntry
 	pod           string
 	namespace     string
+	kubeContext   string
 	stats         *kube.Stats
 	cancel        context.CancelFunc
 	done          chan struct{}
@@ -88,7 +89,8 @@ func (s *runningService) snapshot() model.Service {
 		Logs:         logsCopy,
 
 		Target:         s.spec.Target(),
-		Namespace:      s.namespace,
+		Context:        firstNonEmpty(s.kubeContext, s.spec.Context),
+		Namespace:      firstNonEmpty(s.namespace, s.spec.Namespace),
 		Pod:            s.pod,
 		ConnectedSince: s.healthySince,
 	}
@@ -523,9 +525,17 @@ func (m *ServiceManager) ClearLogs(serviceName string) {
 	}
 }
 
-func (s *runningService) setTarget(pod, namespace string) {
+func (s *runningService) setTarget(pod, namespace, kubeContext string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pod = pod
 	s.namespace = namespace
+	s.kubeContext = kubeContext
+}
+
+func firstNonEmpty(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
 }

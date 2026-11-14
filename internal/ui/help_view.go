@@ -69,6 +69,7 @@ func (u *UI) dashboardShortcutSections() []shortcutSection {
 			{"↑↓ / J K", "choose service"},
 			{"PgUp / PgDn", "scroll logs"},
 			{"Home / End", "first / latest log"},
+			{"I", "show / hide details (group, context, namespace, ports)"},
 		}},
 		{title: "LOGS", items: []helpItem{
 			{"L", "switch all / selected logs"},

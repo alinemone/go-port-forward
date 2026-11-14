@@ -31,7 +31,8 @@ type Service struct {
 
 	// Live tunnel details.
 	Target         string    // e.g. "service/db"
-	Namespace      string    // namespace the target resolved in ("" until resolved)
+	Context        string    // kube context in use (the command's --context until resolved)
+	Namespace      string    // namespace the target resolved in (the command's -n until resolved)
 	Pod            string    // pod currently forwarded to ("" until resolved)
 	ConnectedSince time.Time // when the current tunnel came up (zero when down)
 

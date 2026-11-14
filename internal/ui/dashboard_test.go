@@ -364,3 +364,154 @@ func TestFooterHasNoSeparateGroupsKey(t *testing.T) {
 		t.Fatal("groups live inside the a overlay; no separate g hint")
 	}
 }
+
+func infoServices() []model.Service {
+	svcs := sampleServices()
+	svcs[0].MainPort, svcs[0].Namespace, svcs[0].Context = "5432", "orders", "rostam"
+	svcs[1].MainPort, svcs[1].Namespace, svcs[1].Context = "6379", "salam", "prod"
+	svcs[2].MainPort, svcs[2].Namespace, svcs[2].Context = "5432", "core", "rostam"
+	return svcs
+}
+
+// storeServices saves the running services to the config so they can be grouped.
+func storeServices(t *testing.T, u *UI) {
+	t.Helper()
+	for _, svc := range u.services {
+		if err := u.store.AddService(svc.Name, "kubectl port-forward svc/"+svc.Name+" "+svc.LocalPort+":"+svc.MainPort); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestInfoToggleShowsDetailColumnsAndPersists(t *testing.T) {
+	u, _ := newTestUI(t, 160, 30, infoServices()...)
+	storeServices(t, u)
+	if err := u.store.AddGroup("db", []string{"order-pg", "core"}); err != nil {
+		t.Fatal(err)
+	}
+
+	plain := ansi.Strip(u.viewContent())
+	if strings.Contains(plain, "orders") || strings.Contains(plain, "→5432") {
+		t.Fatalf("details must be off by default\n%s", plain)
+	}
+
+	u.Update(key('i'))
+	plain = ansi.Strip(u.viewContent())
+	for _, want := range []string{"db", "rostam", "prod", "orders", " 1150→5432", " 6383→6379"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("details view is missing %q\n%s", want, plain)
+		}
+	}
+	assertFits(t, u.viewContent(), 160, 30)
+	if on, _ := u.store.InfoEnabled(); !on {
+		t.Fatal("the details toggle must be saved")
+	}
+	if again := NewUI(context.Background(), newFakeController(), u.store); !again.info {
+		t.Fatal("a new dashboard must start with the saved details setting")
+	}
+
+	u.Update(key('i'))
+	if plain = ansi.Strip(u.viewContent()); strings.Contains(plain, "orders") {
+		t.Fatalf("a second i must hide the details\n%s", plain)
+	}
+}
+
+func TestInfoHidesUniformContextAndMissingGroups(t *testing.T) {
+	svcs := infoServices()
+	for i := range svcs {
+		svcs[i].Context = "rostam"
+	}
+	u, _ := newTestUI(t, 160, 30, svcs...)
+	u.Update(key('i'))
+	plain := ansi.Strip(u.viewContent())
+	if !strings.Contains(plain, "● order-pg") {
+		t.Errorf("no service has a group: the name must follow the status glyph\n%s", plain)
+	}
+	for _, hidden := range []string{"rostam"} {
+		if strings.Contains(plain, hidden) {
+			t.Errorf("%q must be hidden when it says nothing\n%s", hidden, plain)
+		}
+	}
+	if !strings.Contains(plain, "orders") {
+		t.Errorf("namespace is always shown with details\n%s", plain)
+	}
+}
+
+func TestInfoFitsEveryTerminal(t *testing.T) {
+	for _, size := range []struct{ w, h int }{{40, 12}, {60, 20}, {90, 24}, {120, 32}, {200, 50}} {
+		u, _ := newTestUI(t, size.w, size.h, infoServices()...)
+		storeServices(t, u)
+		if err := u.store.AddGroup("a-rather-long-group-name", []string{"core"}); err != nil {
+			t.Fatal(err)
+		}
+		u.Update(key('i'))
+		assertFits(t, u.viewContent(), size.w, size.h)
+	}
+}
+
+func TestServiceGroupsJoinsSorted(t *testing.T) {
+	got := serviceGroups(map[string][]string{"web": {"api"}, "db": {"api", "pg"}})
+	if got["api"] != "db, web" || got["pg"] != "db" || got["x"] != "" {
+		t.Fatalf("serviceGroups = %v", got)
+	}
+}
+
+func TestLongNamesShowInFullAndAlign(t *testing.T) {
+	svcs := infoServices()
+	svcs[0].Name = "a-very-long-service-name-for-orders-pg"
+	svcs[1].Namespace = "a-really-long-namespace-name"
+	u, _ := newTestUI(t, 200, 30, svcs...)
+	u.Update(key('i'))
+	plain := ansi.Strip(u.viewContent())
+	for _, want := range []string{svcs[0].Name, svcs[1].Namespace} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("%q must not be truncated\n%s", want, plain)
+		}
+	}
+	// every row's port starts in the same column
+	col := -1
+	for _, line := range strings.Split(plain, "\n") {
+		if i := strings.Index(line, "→"); i >= 0 && strings.Contains(line, "│") {
+			if w := lipgloss.Width(line[:i]); col == -1 {
+				col = w
+			} else if w != col {
+				t.Fatalf("ports are not aligned (%d vs %d)\n%s", w, col, plain)
+			}
+		}
+	}
+	if col == -1 {
+		t.Fatalf("no detail rows found\n%s", plain)
+	}
+}
+
+func TestInfoOrdersByGroupAndKeepsCursor(t *testing.T) {
+	svcs := []model.Service{
+		{Name: "alpha", LocalPort: "1"}, {Name: "beta", LocalPort: "2"},
+		{Name: "gamma", LocalPort: "3"}, {Name: "zeta", LocalPort: "4"},
+	}
+	u, _ := newTestUI(t, 160, 30, svcs...)
+	storeServices(t, u)
+	_ = u.store.AddGroup("x-group", []string{"alpha"})
+	_ = u.store.AddGroup("a-group", []string{"zeta", "gamma"})
+	u.cursorIndex = 3 // zeta
+
+	u.Update(key('i'))
+	var got []string
+	for _, s := range u.services {
+		got = append(got, s.Name)
+	}
+	if want := "gamma zeta alpha beta"; strings.Join(got, " ") != want {
+		t.Fatalf("order = %v, want %s (by group, ungrouped last)", got, want)
+	}
+	if u.services[u.cursorIndex].Name != "zeta" {
+		t.Fatalf("cursor moved to %s, must stay on zeta", u.services[u.cursorIndex].Name)
+	}
+	if plain := ansi.Strip(u.viewContent()); !strings.Contains(plain, "zeta       a-group") {
+		t.Fatalf("the group must follow the service name\n%s", plain)
+	}
+
+	u.Update(key('i'))
+	if u.services[0].Name != "alpha" || u.services[u.cursorIndex].Name != "zeta" {
+		t.Fatal("without details the order is by name again, cursor kept")
+	}
+}

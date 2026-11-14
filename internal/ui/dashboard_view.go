@@ -65,26 +65,41 @@ func (u *UI) spinner() string {
 // ── service rows ────────────────────────────────────────────────────────────
 
 // rowColumns are the widths of one row's fixed columns; the chart takes the
-// rest. Narrow terminals drop the chart, then the status word.
+// rest. Every column is as wide as its longest value, so names show in full and
+// rows line up. Only a terminal too narrow for that drops the chart, then
+// shrinks the detail columns, then drops the status word.
+//
+// The default row is minimal: name, status, local port, uptime. With details
+// on (i) the row reads service, group, context, namespace, status, uptime,
+// LOCAL→REMOTE port (no header line: the values speak for themselves), and
+// rows are ordered by group (see sortByGroup); group
+// is hidden when no running service has one and context when every service
+// uses the same context. A detail width of 0
+// hides that column.
 type rowColumns struct {
 	name, status, chart int
 	icons               bool // a port icon cell before the name (`pf icon on`)
+
+	info                      bool
+	group, context, namespace int
+	port                      int
 }
 
 const (
-	statusWidth = 10 // "connecting"
-	portWidth   = 6  // ":15432"
-	uptimeWidth = 7  // "23h 59m"
-	rateWidth   = 5  // "12.4M"
-	minChart    = 8
+	statusWidth    = 10 // "connecting"
+	portWidth      = 6  // ":15432"
+	uptimeWidth    = 7  // "23h 59m"
+	rateWidth      = 5  // "12.4M"
+	minChart       = 8
+	detailGap      = 2 // spaces after each detail column
+	minDetailWidth = 4
 )
 
-func computeRowColumns(services []model.Service, inner int) rowColumns {
+func computeRowColumns(services []model.Service, groups map[string]string, info bool, inner int) rowColumns {
 	name := 8
 	for i := range services {
 		name = max(name, lipgloss.Width(services[i].Name))
 	}
-	name = min(name, 24)
 
 	c := rowColumns{name: name, status: statusWidth}
 	for i := range services {
@@ -93,24 +108,81 @@ func computeRowColumns(services []model.Service, inner int) rowColumns {
 			break
 		}
 	}
-	// bar+space, status glyph+space, [port icon], name, 3, status, 2, port, 2, uptime
+	if info {
+		c.info = true
+		c.namespace = 1 // room for the "—" of an unresolved namespace
+		contexts := map[string]bool{}
+		for i := range services {
+			svc := &services[i]
+			c.port = max(c.port, lipgloss.Width(portLabel(svc, true)))
+			c.namespace = max(c.namespace, lipgloss.Width(svc.Namespace))
+			contexts[svc.Context] = true
+			if g := groups[svc.Name]; g != "" {
+				c.group = max(c.group, lipgloss.Width(g))
+			}
+		}
+		if len(contexts) > 1 {
+			c.context = 1
+			for i := range services {
+				c.context = max(c.context, lipgloss.Width(services[i].Context))
+			}
+		}
+	}
+
+	// Mirrors renderRow: bar+space, status glyph+space, [port icon], ...
 	fixed := func() int {
-		w := 4 + c.name + 3 + c.status + 2 + portWidth + 2 + uptimeWidth
+		w := 4 + c.name + 3 + uptimeWidth + 2
 		if c.icons {
 			w += 2
 		}
-		return w
+		if c.status > 0 {
+			w += c.status + 2
+		}
+		if !c.info {
+			return w + portWidth
+		}
+		for _, d := range []int{c.group, c.context, c.namespace} {
+			if d > 0 {
+				w += d + detailGap
+			}
+		}
+		return w + c.port
 	}
 
 	if chart := inner - fixed() - 3 - 1 - rateWidth; chart >= minChart {
 		c.chart = min(chart, historyLen/2)
 		return c
 	}
+	// Too narrow for the chart: trim the widest detail column, one cell at a
+	// time, until the row fits or every detail column is at its minimum.
+	for fixed() > inner {
+		widest := &c.namespace
+		for _, d := range []*int{&c.context, &c.group} {
+			if *d > *widest {
+				widest = d
+			}
+		}
+		if *widest <= minDetailWidth {
+			break
+		}
+		*widest--
+	}
 	if inner-fixed() < 0 {
 		c.status = 0
 		c.name = max(4, min(c.name, inner-fixed()+c.name))
 	}
 	return c
+}
+
+// portLabel is the forward's port: ":LOCAL", or with details "LOCAL→REMOTE".
+func portLabel(svc *model.Service, withRemote bool) string {
+	if !withRemote {
+		return ":" + svc.LocalPort
+	}
+	if svc.MainPort == "" {
+		return svc.LocalPort
+	}
+	return svc.LocalPort + "→" + svc.MainPort
 }
 
 func (u *UI) renderRows(l dashLayout, inner int, now time.Time) []string {
@@ -125,7 +197,7 @@ func (u *UI) renderRows(l dashLayout, inner int, now time.Time) []string {
 
 	u.ensureCursorVisible(l.rows)
 	end := min(len(u.services), u.tableOffset+l.rows)
-	cols := computeRowColumns(u.services, inner)
+	cols := computeRowColumns(u.services, u.groups, u.info, inner)
 
 	lines := make([]string, 0, l.rows+1)
 	for i := u.tableOffset; i < end; i++ {
@@ -167,6 +239,19 @@ func (u *UI) renderRow(svc *model.Service, c rowColumns, selected bool, now time
 		b.WriteString(cell)
 	}
 
+	// detail renders one info column; empty values show a muted dash.
+	detail := func(value string, width int) {
+		if width <= 0 {
+			return
+		}
+		style := fg(colorMuted)
+		if value == "" {
+			value = "—"
+		} else {
+			style = fg(colorText)
+		}
+		b.WriteString(style.Render(fitWidth(truncateRunes(value, width), width)) + strings.Repeat(" ", detailGap))
+	}
 	name := lipgloss.NewStyle().Foreground(colorText)
 	if selected {
 		name = name.Foreground(hue).Bold(true)
@@ -174,16 +259,26 @@ func (u *UI) renderRow(svc *model.Service, c rowColumns, selected bool, now time
 	b.WriteString(name.Render(fitWidth(truncateRunes(svc.Name, c.name), c.name)))
 	b.WriteString("   ")
 
+	detail(u.groups[svc.Name], c.group)
+	detail(svc.Context, c.context)
+	detail(svc.Namespace, c.namespace)
+
 	if c.status > 0 {
 		b.WriteString(fg(statusColor).Render(fitWidth(word, c.status)) + "  ")
 	}
-	b.WriteString(fg(colorText).Render(fitWidth(":"+svc.LocalPort, portWidth)) + "  ")
 
 	uptime := "—"
 	if svc.Status == model.StatusHealthy && !svc.ConnectedSince.IsZero() {
 		uptime = formatDuration(now.Sub(svc.ConnectedSince))
 	}
-	b.WriteString(fg(colorMuted).Render(fitWidth(uptime, uptimeWidth)))
+	uptimeCell := fg(colorMuted).Render(fitWidth(uptime, uptimeWidth))
+	if c.info {
+		b.WriteString(uptimeCell + "  ")
+		b.WriteString(fg(colorText).Render(fitWidth(portLabel(svc, true), c.port)))
+	} else {
+		b.WriteString(fg(colorText).Render(fitWidth(portLabel(svc, false), portWidth)) + "  ")
+		b.WriteString(uptimeCell)
+	}
 
 	if c.chart > 0 {
 		b.WriteString("   ")
@@ -330,6 +425,7 @@ func (u *UI) footerItems(compact bool) [][2]string {
 		return full
 	}
 	items := [][2]string{
+		{"i", label("details", "info")},
 		{label("L/Ctrl+L", "L/^L"), label("view / clear logs", "logs")},
 	}
 	if u.aliasEnabled {

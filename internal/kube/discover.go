@@ -163,7 +163,7 @@ func ListNamespaces(ctx context.Context, kubeContext string, opts Options) ([]st
 }
 
 func discoveryClient(kubeContext string, opts Options) (*apiClient, string, error) {
-	cfg, ns, err := restConfig(Spec{Context: kubeContext}, opts)
+	cfg, ns, _, err := restConfig(Spec{Context: kubeContext}, opts)
 	if err != nil {
 		return nil, "", err
 	}

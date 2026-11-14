@@ -602,6 +602,7 @@ When running services:
 - **?** - Open the complete, page-specific shortcut reference
 - **↑↓** / **j k** - Move selection between services
 - **PgUp** / **PgDn** / **mouse wheel** - Scroll the log panel
+- **i** - Show / hide details: group, kube context, namespace and `local→remote` port columns (saved in config; group is hidden when no service has one, context when all share one)
 - **L** - Toggle the log panel between all services and only the selected service
 - **Ctrl+L** - Clear logs in the current view (all services or only the selected service)
 - **r** - Restart the selected service

@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 
 	"charm.land/bubbles/v2/viewport"
@@ -81,6 +82,9 @@ type UI struct {
 	lastLogVersion    string
 	helpVisible       bool
 
+	info   bool              // detail columns on the dashboard (i); persisted in the config
+	groups map[string]string // service name → its groups, comma-joined (refreshed while info is on)
+
 	traffic   map[string]*traffic // per-service throughput history for the charts
 	startedAt time.Time           // mission clock origin (T+ in every header)
 }
@@ -89,14 +93,84 @@ const uiTickInterval = 500 * time.Millisecond
 
 func NewUI(ctx context.Context, mgr Controller, store *storage.Storage) *UI {
 	aliasEnabled, _ := store.HostAliasEnabled()
-	return &UI{
+	info, _ := store.InfoEnabled()
+	u := &UI{
 		manager:      mgr,
 		store:        store,
 		services:     []model.Service{},
 		ctx:          ctx,
 		aliasEnabled: aliasEnabled,
+		info:         info,
 		startedAt:    time.Now(),
 	}
+	if info {
+		u.refreshGroups()
+	}
+	return u
+}
+
+// refreshGroups re-reads group membership from the config, so groups edited
+// in the overlay or the config file show up on the dashboard.
+func (u *UI) refreshGroups() {
+	groups, err := u.store.ListGroups()
+	if err != nil {
+		return
+	}
+	u.groups = serviceGroups(groups)
+}
+
+// loadServices fetches the running services. With details on they are ordered
+// by group (ungrouped last), then name; otherwise by name. The cursor stays on
+// the same service when the order changes.
+func (u *UI) loadServices() {
+	selected := ""
+	if u.cursorIndex >= 0 && u.cursorIndex < len(u.services) {
+		selected = u.services[u.cursorIndex].Name
+	}
+	u.services = u.manager.ListServiceStates()
+	if u.info {
+		sortByGroup(u.services, u.groups)
+	}
+	for i := range u.services {
+		if u.services[i].Name == selected {
+			u.cursorIndex = i
+			break
+		}
+	}
+}
+
+// sortByGroup orders services by group, ungrouped last, then by name.
+func sortByGroup(services []model.Service, groups map[string]string) {
+	sort.SliceStable(services, func(i, j int) bool {
+		gi, gj := groups[services[i].Name], groups[services[j].Name]
+		if (gi == "") != (gj == "") {
+			return gj == ""
+		}
+		if gi != gj {
+			return gi < gj
+		}
+		return services[i].Name < services[j].Name
+	})
+}
+
+// serviceGroups inverts group → members into service → "g1, g2" (sorted).
+func serviceGroups(groups map[string][]string) map[string]string {
+	names := make([]string, 0, len(groups))
+	for name := range groups {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	out := make(map[string]string)
+	for _, group := range names {
+		for _, svc := range groups[group] {
+			if out[svc] != "" {
+				out[svc] += ", "
+			}
+			out[svc] += group
+		}
+	}
+	return out
 }
 
 // normalizeKeyToken maps a key message to the canonical token used by the
@@ -248,6 +322,16 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "c":
 			return u, u.launchEditor()
 
+		case "i":
+			u.info = !u.info
+			if u.info {
+				u.refreshGroups()
+			}
+			u.loadServices() // reorders: by group with details, by name without
+			if err := u.store.SetInfoEnabled(u.info); err != nil {
+				return u, u.setStatus(fmt.Sprintf("✗ Could not save details setting: %v", err))
+			}
+
 		case "l":
 			u.logFilterSelected = !u.logFilterSelected
 			u.refreshViewportContent()
@@ -261,7 +345,7 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				label = scope
 			}
 			u.manager.ClearLogs(scope)
-			u.services = u.manager.ListServiceStates()
+			u.loadServices()
 			u.refreshViewportContent()
 			return u, u.setStatus("✓ Logs cleared: " + label)
 
@@ -319,7 +403,10 @@ func (u *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if u.quitting {
 			return u, nil
 		}
-		u.services = u.manager.ListServiceStates()
+		if u.info {
+			u.refreshGroups()
+		}
+		u.loadServices()
 		u.ensureCursorInRange()
 		u.sampleTraffic(time.Time(msg))
 		u.refreshViewportContent()

@@ -71,6 +71,7 @@ type StorageData struct {
 	HostAlias *HostAliasConfig     `json:"hostAlias,omitempty"`
 	Theme     string               `json:"theme,omitempty"`
 	Themes    map[string]ThemeSpec `json:"themes,omitempty"`
+	Info      bool                 `json:"info,omitempty"` // dashboard detail columns (toggled with i)
 	Legacy    map[string]string    `json:"-"`
 }
 
@@ -199,6 +200,27 @@ func (s *Storage) SetTheme(name string) error {
 	return s.writeStorage(data)
 }
 
+// InfoEnabled reports whether the dashboard shows its detail columns (group,
+// context, namespace, remote port).
+func (s *Storage) InfoEnabled() (bool, error) {
+	data, err := s.readStorage()
+	if err != nil {
+		return false, err
+	}
+	return data.Info, nil
+}
+
+// SetInfoEnabled persists the dashboard detail toggle, preserving the rest of
+// the config.
+func (s *Storage) SetInfoEnabled(enabled bool) error {
+	data, err := s.readStorage()
+	if err != nil {
+		return err
+	}
+	data.Info = enabled
+	return s.writeStorage(data)
+}
+
 func (s *Storage) IconEnabled() (bool, error) {
 	data, err := s.readStorage()
 	if err != nil {
@@ -318,7 +340,7 @@ func (s *Storage) readStorage() (*StorageData, error) {
 	}
 
 	var storageData StorageData
-	if err := json.Unmarshal(data, &storageData); err == nil && (storageData.Services != nil || storageData.Groups != nil || storageData.Icon != nil || storageData.HostAlias != nil || storageData.Theme != "" || storageData.Themes != nil) {
+	if err := json.Unmarshal(data, &storageData); err == nil && (storageData.Services != nil || storageData.Groups != nil || storageData.Icon != nil || storageData.HostAlias != nil || storageData.Theme != "" || storageData.Themes != nil || storageData.Info) {
 		if storageData.Services == nil {
 			storageData.Services = make(map[string]string)
 		}
