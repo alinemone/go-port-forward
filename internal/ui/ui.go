@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"sort"
 	"time"
 
@@ -434,16 +435,38 @@ func (u *UI) shutdownCmd() tea.Cmd {
 	}
 }
 
-// copyAlias yanks the selected service's cluster-host alias to the system
-// clipboard, reporting the result in the status line.
+// copyAlias yanks the selected service's cluster-host alias (as host:port, ready
+// to paste into a DB client) to the clipboard, reporting the result in the
+// status line.
+//
+// The native clipboard (atotto) needs xclip/xsel/wl-copy on Linux, which are
+// often missing — and never reach the local machine over SSH. So outside
+// Windows the text is also sent through the terminal itself with OSC 52, to
+// both the clipboard and the X11/Wayland PRIMARY selection (middle-click
+// paste). OSC 52 works in most modern terminals (kitty, Alacritty, WezTerm,
+// foot, Konsole, iTerm2, Windows Terminal, tmux with set-clipboard on).
 func (u *UI) copyAlias(svc model.Service) tea.Cmd {
 	if svc.Alias == "" {
 		return u.setStatus("○ No cluster alias for " + svc.Name + " — enable it with 'pf alias on'")
 	}
-	if err := clipboard.WriteAll(svc.Alias); err != nil {
-		return u.setStatus("✗ Copy failed: " + err.Error())
+	text := svc.Alias
+	if svc.LocalPort != "" {
+		text += ":" + svc.LocalPort
 	}
-	return u.setStatus("✓ Copied " + svc.Alias)
+
+	nativeErr := clipboard.WriteAll(text)
+	if runtime.GOOS == "windows" {
+		if nativeErr != nil {
+			return u.setStatus("✗ Copy failed: " + nativeErr.Error())
+		}
+		return u.setStatus("✓ Copied " + text)
+	}
+
+	osc := tea.Batch(tea.SetClipboard(text), tea.SetPrimaryClipboard(text))
+	if nativeErr != nil {
+		return tea.Batch(osc, u.setStatus("✓ Sent "+text+" via terminal (OSC 52) — no xclip/wl-copy; or run 'pf alias status'"))
+	}
+	return tea.Batch(osc, u.setStatus("✓ Copied "+text))
 }
 
 func (u *UI) setStatus(text string) tea.Cmd {

@@ -27,6 +27,7 @@ type Service struct {
 	StartTime    time.Time
 	RestartCount int
 	Alias        string // in-cluster hostname aliased to localhost (empty if none active)
+	BindIP       string // dedicated loopback IP when the local port is shared ("" = localhost)
 	Logs         []LogEntry
 
 	// Live tunnel details.

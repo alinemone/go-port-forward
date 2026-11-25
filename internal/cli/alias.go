@@ -27,6 +27,7 @@ func runAliasCommand(args []string) {
 			os.Exit(1)
 		}
 		printAliasStatus(enabled)
+		printActiveAliases()
 	case "on", "enable", "true":
 		setAliasEnabled(st, true)
 	case "off", "disable", "false":
@@ -57,6 +58,21 @@ func printAliasStatus(enabled bool) {
 		fmt.Println("✓ Cluster-host aliases: ON")
 	} else {
 		fmt.Println("○ Cluster-host aliases: OFF")
+	}
+}
+
+// printActiveAliases lists the hostnames pf currently has in the hosts file,
+// one per line as plain `host  →  ip`, so they can be copied from a normal
+// terminal (outside the TUI, where mouse selection just works).
+func printActiveAliases() {
+	entries, err := hostsfile.List()
+	if err != nil || len(entries) == 0 {
+		return
+	}
+	fmt.Println()
+	fmt.Println("Active aliases (while pf is running):")
+	for _, e := range entries {
+		fmt.Printf("  %s  →  %s\n", e.Host, e.IP)
 	}
 }
 

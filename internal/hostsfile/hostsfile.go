@@ -15,8 +15,28 @@ import (
 const (
 	beginMarker = "# >>> pf managed aliases >>>"
 	endMarker   = "# <<< pf managed aliases <<<"
-	aliasIP     = "127.0.0.1"
+	// LocalhostIP is the address used for services bound on localhost.
+	LocalhostIP = "127.0.0.1"
+	aliasIP     = LocalhostIP
 )
+
+// Entry is one `IP hostname` line in the managed block. Services forwarded on
+// localhost use LocalhostIP; services moved to a dedicated loopback IP (because
+// their local port is shared) use that IP, so each hostname reaches its own
+// forward even when several listen on the same port.
+type Entry struct {
+	IP   string
+	Host string
+}
+
+// Localhost maps every hostname to 127.0.0.1.
+func Localhost(hosts []string) []Entry {
+	out := make([]Entry, 0, len(hosts))
+	for _, h := range hosts {
+		out = append(out, Entry{IP: LocalhostIP, Host: h})
+	}
+	return out
+}
 
 // DefaultPath returns the OS hosts-file location.
 func DefaultPath() string {
@@ -31,12 +51,13 @@ func DefaultPath() string {
 }
 
 // Render returns the hosts-file contents with the pf-managed block replaced by
-// fresh `127.0.0.1 <fqdn>` lines for fqdns. Any previous managed block is
-// stripped first, so Render is idempotent. When fqdns is empty the block is
-// removed entirely. Content outside the markers is preserved; fqdns are sorted
-// and de-duplicated so identical inputs always produce identical output. crlf
-// selects the line ending used for the rebuilt file.
-func Render(existing []byte, fqdns []string, crlf bool) []byte {
+// fresh `<ip> <host>` lines for entries. Any previous managed block is stripped
+// first, so Render is idempotent. When entries is empty the block is removed
+// entirely. Content outside the markers is preserved; entries are sorted by
+// host and de-duplicated by host (first wins) so identical inputs always
+// produce identical output. crlf selects the line ending used for the rebuilt
+// file.
+func Render(existing []byte, entries []Entry, crlf bool) []byte {
 	eol := "\n"
 	if crlf {
 		eol = "\r\n"
@@ -64,10 +85,10 @@ func Render(existing []byte, fqdns []string, crlf bool) []byte {
 		out = out[:len(out)-1]
 	}
 
-	if hosts := dedupeSorted(fqdns); len(hosts) > 0 {
+	if lines := dedupeSorted(entries); len(lines) > 0 {
 		out = append(out, beginMarker)
-		for _, f := range hosts {
-			out = append(out, aliasIP+"  "+f)
+		for _, e := range lines {
+			out = append(out, e.IP+"  "+e.Host)
 		}
 		out = append(out, endMarker)
 	}
@@ -78,9 +99,10 @@ func Render(existing []byte, fqdns []string, crlf bool) []byte {
 	return []byte(strings.Join(out, eol) + eol)
 }
 
-// Apply writes fqdns as the managed block in the system hosts file, preserving
-// everything else. Requires write permission on the hosts file (admin/root).
-func Apply(fqdns []string) error {
+// Apply writes entries as the managed block in the system hosts file,
+// preserving everything else. Requires write permission on the hosts file
+// (admin/root).
+func Apply(entries []Entry) error {
 	path := DefaultPath()
 
 	existing, err := os.ReadFile(path)
@@ -92,7 +114,7 @@ func Apply(fqdns []string) error {
 	}
 
 	crlf := runtime.GOOS == "windows" || bytes.Contains(existing, []byte("\r\n"))
-	return os.WriteFile(path, Render(existing, fqdns, crlf), 0o644)
+	return os.WriteFile(path, Render(existing, entries, crlf), 0o644)
 }
 
 // Clear removes the pf-managed block from the hosts file, leaving the rest
@@ -133,6 +155,35 @@ func Verify(fqdns []string) (bool, error) {
 	return true, nil
 }
 
+// List returns the entries currently in the pf-managed block of the system
+// hosts file. Read-only, so it needs no elevation.
+func List() ([]Entry, error) {
+	data, err := os.ReadFile(DefaultPath())
+	if err != nil {
+		return nil, err
+	}
+	return parseBlock(data), nil
+}
+
+// parseBlock extracts the `IP host` lines between the managed markers.
+func parseBlock(data []byte) []Entry {
+	var out []Entry
+	inBlock := false
+	for _, ln := range splitLines(data) {
+		switch t := strings.TrimSpace(ln); {
+		case t == beginMarker:
+			inBlock = true
+		case t == endMarker:
+			inBlock = false
+		case inBlock:
+			if f := strings.Fields(t); len(f) == 2 {
+				out = append(out, Entry{IP: f[0], Host: f[1]})
+			}
+		}
+	}
+	return out
+}
+
 // splitLines splits into lines without their terminators, tolerating both LF
 // and CRLF.
 func splitLines(data []byte) []string {
@@ -146,23 +197,27 @@ func splitLines(data []byte) []string {
 	return lines
 }
 
-func dedupeSorted(fqdns []string) []string {
-	if len(fqdns) == 0 {
+func dedupeSorted(entries []Entry) []Entry {
+	if len(entries) == 0 {
 		return nil
 	}
-	seen := make(map[string]struct{}, len(fqdns))
-	out := make([]string, 0, len(fqdns))
-	for _, f := range fqdns {
-		f = strings.TrimSpace(f)
-		if f == "" {
+	seen := make(map[string]struct{}, len(entries))
+	out := make([]Entry, 0, len(entries))
+	for _, e := range entries {
+		e.Host = strings.TrimSpace(e.Host)
+		e.IP = strings.TrimSpace(e.IP)
+		if e.Host == "" {
 			continue
 		}
-		if _, ok := seen[f]; ok {
+		if e.IP == "" {
+			e.IP = LocalhostIP
+		}
+		if _, ok := seen[e.Host]; ok {
 			continue
 		}
-		seen[f] = struct{}{}
-		out = append(out, f)
+		seen[e.Host] = struct{}{}
+		out = append(out, e)
 	}
-	sort.Strings(out)
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Host < out[j].Host })
 	return out
 }

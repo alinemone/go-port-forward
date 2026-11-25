@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -81,7 +80,16 @@ func runStartCommand(args []string) {
 		os.Exit(1)
 	}
 
-	if len(conflicts) > 0 {
+	aliasOn, _ := st.HostAliasEnabled()
+	if len(conflicts) > 0 && aliasOn {
+		// With host aliases on, services sharing a local port each get their own
+		// loopback IP (and hosts entry) instead of failing on localhost.
+		shared := make([]string, 0, len(conflicts))
+		for _, c := range conflicts {
+			shared = append(shared, c.Port)
+		}
+		mgr.SetSharedPorts(shared)
+	} else if len(conflicts) > 0 {
 		fmt.Println("\n⚠️  Port Conflicts Detected:")
 		fmt.Println()
 		for _, conflict := range conflicts {
@@ -91,7 +99,8 @@ func runStartCommand(args []string) {
 			}
 			fmt.Println()
 		}
-		fmt.Println("Please fix the port conflicts before running these services together.")
+		fmt.Println("Please fix the port conflicts before running these services together,")
+		fmt.Println("or run 'pf alias on' to give each its own loopback IP and cluster hostname.")
 		os.Exit(1)
 	}
 
@@ -140,9 +149,10 @@ func runStartCommand(args []string) {
 // startAliasReconciler keeps the system hosts file in sync with the set of
 // currently-running services while the TUI is up. For each running service it
 // derives the in-cluster FQDN (plus any custom aliases pinned by local port) and
-// adds a `127.0.0.1 <fqdn>` entry — so services started at launch AND those
-// added later from the manage overlay ('a') are all reachable by their cluster
-// hostname on their local port.
+// adds an `<ip> <fqdn>` entry — 127.0.0.1 for services on localhost, or the
+// service's dedicated loopback IP when its local port is shared — so services
+// started at launch AND those added later from the manage overlay ('a') are all
+// reachable by their cluster hostname on their local port.
 //
 // It reconciles on a short timer, re-applying only when the running set changes.
 // When the hosts file isn't directly writable it launches one hidden, elevated
@@ -178,6 +188,9 @@ func startAliasReconciler(ctx context.Context, st *storage.Storage, mgr *manager
 		}
 	}
 
+	// appliedIPs tracks the dedicated IPs configured in direct mode (macOS lo0).
+	var appliedIPs []string
+
 	// writeControl atomically publishes the desired host list to the watcher's
 	// control file (temp + rename) so it never observes a half-written line.
 	writeControl := func(data string) {
@@ -197,11 +210,17 @@ func startAliasReconciler(ctx context.Context, st *storage.Storage, mgr *manager
 			hosts      []string
 		}
 		var entries []aliasEntry
-		var all []string
+		var all []hostsfile.Entry
+		var ips []string
 		seen := make(map[string]bool)
 		live := make(map[string]bool)
 
 		for _, s := range mgr.ListServiceStates() {
+			ip := hostsfile.LocalhostIP
+			if s.BindIP != "" {
+				ip = s.BindIP
+				ips = append(ips, s.BindIP)
+			}
 			localPort, _ := storage.ParsePortsFromCommand(s.Command)
 			var hosts []string
 			if fqdn, ok := storage.ClusterHostFromCommand(s.Command); ok {
@@ -222,7 +241,7 @@ func startAliasReconciler(ctx context.Context, st *storage.Storage, mgr *manager
 			for _, h := range hosts {
 				if !seen[h] {
 					seen[h] = true
-					all = append(all, h)
+					all = append(all, hostsfile.Entry{IP: ip, Host: h})
 				}
 			}
 		}
@@ -234,10 +253,9 @@ func startAliasReconciler(ctx context.Context, st *storage.Storage, mgr *manager
 			}
 		}
 
-		sort.Strings(all)
-		if key := strings.Join(all, "\n"); key != lastKey {
+		if key := formatAliasControl(all, ips); key != lastKey {
 			if direct {
-				_ = hostsfile.Apply(all)
+				appliedIPs = syncAliases(all, ips, appliedIPs)
 			} else {
 				writeControl(key)
 			}
@@ -272,7 +290,7 @@ func startAliasReconciler(ctx context.Context, st *storage.Storage, mgr *manager
 	return func() {
 		close(stop)
 		if direct {
-			_ = hostsfile.Clear()
+			syncAliases(nil, nil, appliedIPs)
 		} else {
 			// Blank the control file so the watcher strips the block promptly; it
 			// also clears and exits on its own once this process exits.

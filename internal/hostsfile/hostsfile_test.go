@@ -8,7 +8,7 @@ import (
 
 func TestRenderAddsBlockAndPreservesContent(t *testing.T) {
 	existing := []byte("127.0.0.1 localhost\n255.255.255.255 broadcasthost\n")
-	out := string(Render(existing, []string{"b.svc.cluster.local", "a.svc.cluster.local"}, false))
+	out := string(Render(existing, Localhost([]string{"b.svc.cluster.local", "a.svc.cluster.local"}), false))
 
 	for _, want := range []string{
 		"127.0.0.1 localhost",
@@ -36,8 +36,8 @@ func TestRenderIsIdempotent(t *testing.T) {
 	existing := []byte("127.0.0.1 localhost\n")
 	fqdns := []string{"x.svc.cluster.local", "y.svc.cluster.local"}
 
-	first := Render(existing, fqdns, false)
-	second := Render(first, fqdns, false)
+	first := Render(existing, Localhost(fqdns), false)
+	second := Render(first, Localhost(fqdns), false)
 
 	if !bytes.Equal(first, second) {
 		t.Errorf("Render not idempotent:\nfirst:\n%s\nsecond:\n%s", first, second)
@@ -50,7 +50,7 @@ func TestRenderIsIdempotent(t *testing.T) {
 
 func TestRenderNilRemovesBlock(t *testing.T) {
 	existing := []byte("127.0.0.1 localhost\n")
-	withBlock := Render(existing, []string{"z.svc.cluster.local"}, false)
+	withBlock := Render(existing, Localhost([]string{"z.svc.cluster.local"}), false)
 
 	out := string(Render(withBlock, nil, false))
 	if strings.Contains(out, beginMarker) || strings.Contains(out, "z.svc.cluster.local") {
@@ -63,7 +63,7 @@ func TestRenderNilRemovesBlock(t *testing.T) {
 
 func TestRenderCRLF(t *testing.T) {
 	existing := []byte("127.0.0.1 localhost\r\n")
-	out := string(Render(existing, []string{"w.svc.cluster.local"}, true))
+	out := string(Render(existing, Localhost([]string{"w.svc.cluster.local"}), true))
 
 	if !strings.Contains(out, "\r\n") {
 		t.Error("expected CRLF line endings")
@@ -73,5 +73,29 @@ func TestRenderCRLF(t *testing.T) {
 	}
 	if !strings.Contains(out, aliasIP+"  w.svc.cluster.local") {
 		t.Errorf("missing alias line, got:\n%q", out)
+	}
+}
+
+func TestParseBlockRoundTrip(t *testing.T) {
+	in := []Entry{{IP: "127.0.0.1", Host: "a.ns.svc.cluster.local"}, {IP: "127.77.0.2", Host: "b.ns.svc.cluster.local"}}
+	got := parseBlock(Render([]byte("127.0.0.1 localhost\r\n"), in, true))
+	if len(got) != 2 || got[0] != in[0] || got[1] != in[1] {
+		t.Fatalf("parseBlock = %v, want %v", got, in)
+	}
+}
+
+func TestRenderUsesPerEntryIP(t *testing.T) {
+	out := string(Render(nil, []Entry{
+		{IP: "127.77.0.2", Host: "a.ns.svc.cluster.local"},
+		{IP: "", Host: "b.ns.svc.cluster.local"},
+		{IP: "127.77.0.9", Host: "a.ns.svc.cluster.local"}, // duplicate host: first wins
+	}, false))
+	for _, want := range []string{"127.77.0.2  a.ns.svc.cluster.local", "127.0.0.1  b.ns.svc.cluster.local"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "127.77.0.9") {
+		t.Errorf("duplicate host should be dropped\n%s", out)
 	}
 }

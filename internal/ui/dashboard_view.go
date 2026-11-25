@@ -175,14 +175,20 @@ func computeRowColumns(services []model.Service, groups map[string]string, info 
 }
 
 // portLabel is the forward's port: ":LOCAL", or with details "LOCAL→REMOTE".
+// With details, a service moved to a dedicated loopback IP (shared local port)
+// shows it as "IP:LOCAL→REMOTE".
 func portLabel(svc *model.Service, withRemote bool) string {
 	if !withRemote {
 		return ":" + svc.LocalPort
 	}
-	if svc.MainPort == "" {
-		return svc.LocalPort
+	local := svc.LocalPort
+	if svc.BindIP != "" {
+		local = svc.BindIP + ":" + local
 	}
-	return svc.LocalPort + "→" + svc.MainPort
+	if svc.MainPort == "" {
+		return local
+	}
+	return local + "→" + svc.MainPort
 }
 
 func (u *UI) renderRows(l dashLayout, inner int, now time.Time) []string {

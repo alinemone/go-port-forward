@@ -11,7 +11,7 @@ services.json
 pf-*
 dist/
 *.syso
-
+.omc
 # Logs
 logs
 *.log

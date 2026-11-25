@@ -15,6 +15,7 @@ import (
 
 	"github.com/alinemone/go-port-forward/internal/cert"
 	"github.com/alinemone/go-port-forward/internal/kube"
+	"github.com/alinemone/go-port-forward/internal/loopback"
 	"github.com/alinemone/go-port-forward/internal/model"
 	"github.com/alinemone/go-port-forward/internal/storage"
 )
@@ -43,6 +44,7 @@ type runningService struct {
 	startTime     time.Time
 	restartCount  int
 	alias         string
+	bindIP        string // dedicated loopback IP ("" = bound on localhost)
 	healthySince  time.Time
 	lastRunStable bool
 	logs          []model.LogEntry
@@ -86,6 +88,7 @@ func (s *runningService) snapshot() model.Service {
 		StartTime:    s.startTime,
 		RestartCount: s.restartCount,
 		Alias:        s.alias,
+		BindIP:       s.bindIP,
 		Logs:         logsCopy,
 
 		Target:         s.spec.Target(),
@@ -162,7 +165,14 @@ type ServiceManager struct {
 	storage     *storage.Storage
 	certManager *cert.Manager
 	forward     forwardFunc
-	mu          sync.RWMutex
+	// sharedPorts are local ports that several services of the launch set
+	// forward. With host aliases on, every one of them gets a dedicated
+	// loopback IP instead of localhost.
+	sharedPorts map[int]bool
+	// portFree probes whether a port is still free on 127.0.0.1 (nil →
+	// loopback.PortFree). A field so tests can fake a busy port.
+	portFree func(port int) bool
+	mu       sync.RWMutex
 }
 
 func NewServiceManager(st *storage.Storage) *ServiceManager {
@@ -238,6 +248,7 @@ func (m *ServiceManager) StartService(ctx context.Context, name string) error {
 		return err
 	}
 	icon := iconSet.ForPort(mainPort)
+	aliasOn, _ := m.storage.HostAliasEnabled()
 
 	svcCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
@@ -258,9 +269,19 @@ func (m *ServiceManager) StartService(ctx context.Context, name string) error {
 		done:        done,
 	}
 
+	// Decide the bind address and register under one lock, so two services
+	// started at the same moment can't both claim localhost for one port.
 	m.mu.Lock()
+	if ip := m.dedicatedIPLocked(name, spec, aliasOn); ip != "" {
+		svc.bindIP = ip
+		svc.spec.Addresses = []string{ip}
+	}
 	m.services[name] = svc
 	m.mu.Unlock()
+
+	if svc.bindIP != "" {
+		svc.appendLog(fmt.Sprintf("⇄ local port %s is shared — bound to dedicated loopback %s (not localhost)", localPort, svc.bindIP), false)
+	}
 
 	go func() {
 		defer close(done)
@@ -268,6 +289,64 @@ func (m *ServiceManager) StartService(ctx context.Context, name string) error {
 	}()
 
 	return nil
+}
+
+// SetSharedPorts records the local ports shared by several services of the
+// launch set. Called before the services start, so every service on such a
+// port — not just the second one to start — moves to a dedicated loopback IP.
+func (m *ServiceManager) SetSharedPorts(ports []string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sharedPorts = make(map[int]bool, len(ports))
+	for _, p := range ports {
+		if n, err := strconv.Atoi(strings.TrimSpace(p)); err == nil {
+			m.sharedPorts[n] = true
+		}
+	}
+}
+
+// dedicatedIPLocked returns the loopback IP a starting service must bind
+// instead of localhost, or "" to keep localhost. It only applies with host
+// aliases on (that's what makes a dedicated IP reachable by name) and when the
+// command doesn't pin its own --address. A service moves off localhost when any
+// of its local ports is shared by the launch set, already held on localhost by
+// another running service (e.g. one added later from the manage overlay), or
+// busy on 127.0.0.1 because of some other program. Caller holds m.mu.
+func (m *ServiceManager) dedicatedIPLocked(name string, spec kube.Spec, aliasOn bool) string {
+	if !aliasOn || len(spec.Addresses) > 0 {
+		return ""
+	}
+
+	onLocalhost := make(map[int]bool)
+	taken := make(map[string]bool)
+	for other, s := range m.services {
+		if other == name {
+			continue
+		}
+		if s.bindIP != "" {
+			taken[s.bindIP] = true
+			continue
+		}
+		for _, p := range s.spec.Ports {
+			onLocalhost[p.Local] = true
+		}
+	}
+
+	free := m.portFree
+	if free == nil {
+		free = loopback.PortFree
+	}
+	conflict := false
+	for _, p := range spec.Ports {
+		if m.sharedPorts[p.Local] || onLocalhost[p.Local] || !free(p.Local) {
+			conflict = true
+			break
+		}
+	}
+	if !conflict {
+		return ""
+	}
+	return loopback.ForName(name, func(ip string) bool { return taken[ip] })
 }
 
 func (m *ServiceManager) runServiceLoop(ctx context.Context, svc *runningService) {
@@ -311,6 +390,11 @@ func (m *ServiceManager) runServiceOnce(ctx context.Context, svc *runningService
 	svc.lastError = ""
 	svc.healthySince = time.Time{}
 	svc.mu.Unlock()
+
+	if svc.bindIP != "" {
+		// macOS: give the elevated helper a moment to add the lo0 alias.
+		loopback.WaitReady(ctx, svc.bindIP, 5*time.Second)
+	}
 
 	err := m.forward(ctx, svc.spec, m.forwardOptions(), kube.Hooks{
 		Log:    svc.appendLog,
@@ -486,6 +570,10 @@ func (m *ServiceManager) NoteAlias(name string, hosts []string, localPort string
 	reachable := make([]string, len(hosts))
 	for i, h := range hosts {
 		reachable[i] = h + ":" + localPort
+	}
+	if svc.bindIP != "" {
+		svc.appendLog("✓ cluster alias active ("+svc.bindIP+") — reachable at "+strings.Join(reachable, ", "), false)
+		return
 	}
 	svc.appendLog("✓ cluster alias active — also reachable at "+strings.Join(reachable, ", "), false)
 }
