@@ -45,6 +45,7 @@ func runHostsHelper(args []string) {
 		if err != nil {
 			os.Exit(2)
 		}
+		detachHelper()
 		watchHostsControl(pid, args[2])
 
 	case "clear":

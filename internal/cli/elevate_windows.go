@@ -112,6 +112,10 @@ func runElevatedHidden(exe, params string) bool {
 	return true
 }
 
+// detachHelper is a no-op on Windows: the elevated helper is already a hidden,
+// independent process started through ShellExecuteEx.
+func detachHelper() {}
+
 // parentAlive reports whether the process with the given pid is still running.
 // Used by the elevated `__hosts watch` helper to know when to clean up.
 func parentAlive(pid int) bool {
